@@ -13,7 +13,7 @@
    1. API 기본 설정
 ========================================================= */
 
-const API_BASE_URL = "https://time-api.onrender.com";
+const API_BASE_URL = "https://time-api-ocdq.onrender.com";
 
 
 /* =========================================================
