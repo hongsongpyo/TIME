@@ -346,29 +346,48 @@ function buildChartLayout(result) {
       x: 0,
       xanchor: "left",
     },
+
     xaxis: {
       title: "Date",
       type: "date",
       rangeslider: {
         visible: true,
+        thickness: 0.08,
       },
+      fixedrange: false,
     },
+
     yaxis: {
       title: "Value",
       zeroline: false,
+      fixedrange: false,
+      autorange: true,
+      rangemode: "normal",
     },
+
     legend: {
-      orientation: "h",
-      y: -0.32,
-      x: 0,
+      title: {
+        text: "Graph Legend",
+      },
+      orientation: "v",
+      x: 1.02,
+      y: 1,
+      xanchor: "left",
+      yanchor: "top",
+      bgcolor: "rgba(255,255,255,0.85)",
+      bordercolor: "#e5e7eb",
+      borderwidth: 1,
     },
+
     margin: {
       l: 60,
-      r: 30,
+      r: 230,
       t: 60,
-      b: 140,
+      b: 110,
     },
+
     hovermode: "x unified",
+    dragmode: "zoom",
   };
 }
 
@@ -380,6 +399,9 @@ function buildChartConfig() {
     modeBarButtonsToRemove: [
       "lasso2d",
       "select2d",
+    ],
+    modeBarButtonsToAdd: [
+      "drawline",
     ],
   };
 }
