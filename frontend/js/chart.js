@@ -325,7 +325,7 @@ function buildTimeSeriesTraces(result) {
 
   buildTrainTestTraces(forecast).forEach((trace) => traces.push(trace));
   buildValidationPredictionTraces(forecast).forEach((trace) => traces.push(trace));
-  buildFuturePredictionTraces(forecast).forEach((trace) => traces.push(trace));
+
   buildDataAndPointTraces(timeSeries).forEach((trace) => traces.push(trace));
   buildDecompositionTraces(decomposition).forEach((trace) => traces.push(trace));
 
