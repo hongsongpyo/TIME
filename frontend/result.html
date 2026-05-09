@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>TIME | Result</title>
+
+  <link rel="stylesheet" href="./css/style.css" />
+
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+
+<body>
+  <div class="result-page">
+    <header class="app-header">
+      <button id="backButton" class="back-button" type="button">
+        ← 뒤로가기
+      </button>
+
+      <div class="app-title">TIME</div>
+      <div class="app-credit">Made by Songpyo Hong</div>
+    </header>
+
+    <main class="result-main">
+      <section class="result-top">
+        <div>
+          <h1 class="page-title">예측 결과 시각화</h1>
+          <p class="page-description">
+            legend를 클릭하면 원하는 그래프만 켜고 끌 수 있습니다.
+          </p>
+        </div>
+
+        <div id="summaryCards" class="summary-cards"></div>
+      </section>
+
+      <section class="chart-section">
+        <div id="forecastChart" class="forecast-chart"></div>
+      </section>
+
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2>모델별 성능 비교 대시보드</h2>
+          <p>RMSE, MAPE, AIC, BIC 등을 기준으로 모델 성능을 비교합니다.</p>
+        </div>
+
+        <div class="metrics-table-wrapper">
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>MAE</th>
+                <th>RMSE</th>
+                <th>MAPE</th>
+                <th>SMAPE</th>
+                <th>AIC</th>
+                <th>BIC</th>
+                <th>Rank</th>
+              </tr>
+            </thead>
+            <tbody id="metricsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <p id="resultStatus" class="result-status"></p>
+    </main>
+  </div>
+
+  <script src="./js/storage.js"></script>
+  <script src="./js/chart.js"></script>
+  <script src="./js/result.js"></script>
+</body>
+</html>

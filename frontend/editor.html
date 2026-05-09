@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>TIME | Editor</title>
+
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+
+<body>
+  <div class="editor-page">
+    <header class="app-header">
+      <button id="backButton" class="back-button" type="button">
+        ← 뒤로가기
+      </button>
+
+      <div class="app-title">TIME</div>
+      <div class="app-credit">Made by Songpyo Hong</div>
+    </header>
+
+    <main class="editor-main">
+      <section class="editor-toolbar">
+        <div class="toolbar-left">
+          <h1 class="page-title">데이터 편집</h1>
+          <p class="page-description">
+            CSV 데이터를 표에서 수정하고, 예측 시평과 특이치를 설정하세요.
+          </p>
+        </div>
+
+        <div class="toolbar-right">
+          <label class="horizon-field">
+            <span>시평</span>
+            <input
+              id="horizonInput"
+              type="number"
+              min="1"
+              value="12"
+            />
+          </label>
+
+          <button id="addRowButton" class="tool-button" type="button">
+            행 추가
+          </button>
+
+          <button id="addColumnButton" class="tool-button" type="button">
+            열 추가
+          </button>
+
+          <button id="specialModeButton" class="tool-button" type="button">
+            특이치 설정
+          </button>
+
+          <button id="runAnalysisButton" class="primary-button" type="button">
+            자동 분석 실행
+          </button>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="table-guide">
+          <span>셀과 컬럼명을 직접 클릭해서 수정할 수 있습니다.</span>
+          <span>특이치 설정 버튼을 누른 뒤 셀을 클릭하면 특이치로 지정됩니다.</span>
+        </div>
+
+        <div class="table-wrapper">
+          <table id="dataTable" class="data-table">
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <p id="editorStatus" class="editor-status"></p>
+    </main>
+  </div>
+
+  <script src="./js/storage.js"></script>
+  <script src="./js/api.js"></script>
+  <script src="./js/editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>TIME | Upload</title>
+
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+
+<body>
+  <div class="upload-page">
+    <header class="app-header">
+      <div class="app-title">TIME</div>
+      <div class="app-credit">Made by Songpyo Hong</div>
+    </header>
+
+    <main class="upload-main">
+      <section class="upload-card">
+        <label for="csvFileInput" class="upload-box">
+          <span class="upload-plus">+</span>
+          <span class="upload-text">CSV 파일 업로드하기</span>
+        </label>
+
+        <input
+          type="file"
+          id="csvFileInput"
+          accept=".csv"
+          hidden
+        />
+
+        <p id="uploadStatus" class="upload-status">
+          CSV 파일을 선택하면 자동으로 다음 단계로 이동합니다.
+        </p>
+      </section>
+    </main>
+  </div>
+
+  <script src="./js/storage.js"></script>
+  <script src="./js/api.js"></script>
+  <script src="./js/upload.js"></script>
+</body>
+</html>
