@@ -427,3 +427,27 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+button:disabled,
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+body.analyzing .table-wrapper {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+body.analyzing::after {
+  content: "자동 분석 중입니다...";
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  background: #111827;
+  color: #ffffff;
+  padding: 14px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}

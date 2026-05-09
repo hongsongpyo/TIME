@@ -272,28 +272,42 @@ def forecast_auto_arima(
 ) -> Dict[str, Any]:
     try:
         if auto_arima is not None:
-            use_seasonal = seasonal_period >= 2 and len(train) >= seasonal_period * 2
-
             validation_model = auto_arima(
                 train,
-                seasonal=use_seasonal,
-                m=seasonal_period if use_seasonal else 1,
+                seasonal=False,
+                m=1,
                 stepwise=True,
                 suppress_warnings=True,
                 error_action="ignore",
                 trace=False,
+                max_p=3,
+                max_q=3,
+                max_d=2,
+                max_P=1,
+                max_Q=1,
+                max_D=1,
+                max_order=5,
+                n_jobs=1,
             )
 
             validation_pred = validation_model.predict(n_periods=len(test))
 
             final_model = auto_arima(
                 full_series,
-                seasonal=use_seasonal and len(full_series) >= seasonal_period * 2,
-                m=seasonal_period if use_seasonal and len(full_series) >= seasonal_period * 2 else 1,
+                seasonal=False,
+                m=1,
                 stepwise=True,
                 suppress_warnings=True,
                 error_action="ignore",
                 trace=False,
+                max_p=3,
+                max_q=3,
+                max_d=2,
+                max_P=1,
+                max_Q=1,
+                max_D=1,
+                max_order=5,
+                n_jobs=1,
             )
 
             future_pred = final_model.predict(n_periods=horizon)

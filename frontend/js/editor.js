@@ -20,6 +20,7 @@ let tableHead = null;
 let tableBody = null;
 let horizonInput = null;
 let editorStatus = null;
+let isAnalyzing = false;
 
 
 /* =========================================================
@@ -359,6 +360,8 @@ function toggleProtectedCell(rowIndex, columnName) {
 ========================================================= */
 
 async function handleRunAnalysis() {
+  if (isAnalyzing) return;
+
   saveCurrentState();
 
   if (!tableData || tableData.length === 0) {
@@ -374,7 +377,9 @@ async function handleRunAnalysis() {
   }
 
   try {
-    setEditorStatus("자동 분석을 실행하는 중입니다...");
+    isAnalyzing = true;
+    setEditorLock(true);
+    setEditorStatus("자동 분석을 실행하는 중입니다. 잠시만 기다려주세요...");
 
     const result = await window.TIMEApi.runAnalysis(
       tableData,
@@ -389,7 +394,30 @@ async function handleRunAnalysis() {
   } catch (error) {
     console.error(error);
     setEditorStatus(error.message || "자동 분석 중 오류가 발생했습니다.");
+  } finally {
+    isAnalyzing = false;
+    setEditorLock(false);
   }
+}
+
+function setEditorLock(locked) {
+  const buttons = document.querySelectorAll("button");
+  const inputs = document.querySelectorAll("input");
+  const editableCells = document.querySelectorAll("[contenteditable='true']");
+
+  buttons.forEach((button) => {
+    button.disabled = locked;
+  });
+
+  inputs.forEach((input) => {
+    input.disabled = locked;
+  });
+
+  editableCells.forEach((cell) => {
+    cell.contentEditable = locked ? "false" : "true";
+  });
+
+  document.body.classList.toggle("analyzing", locked);
 }
 
 
