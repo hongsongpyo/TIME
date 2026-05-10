@@ -44,23 +44,7 @@ def serialize_points(
 # 2. 모델별 미래 예측값 정리
 # =========================================================
 
-def build_forecast_series(
-    forecast_result: Dict[str, Any],
-) -> Dict[str, Any]:
-    future_dates = forecast_result.get("future_dates", [])
-    model_results = forecast_result.get("model_results", {})
 
-    series = {}
-
-    for model_name, result in model_results.items():
-        series[model_name] = {
-            "date": future_dates,
-            "value": result.get("future_pred", []),
-            "success": result.get("success", False),
-            "message": result.get("message", ""),
-        }
-
-    return series
 
 
 # =========================================================
@@ -205,10 +189,10 @@ def run_time_series_analysis(
             "method": decomposition_result["method"],
         },
         "forecast": {
-            "future_dates": forecast_result["future_dates"],
+            "train_dates": forecast_result["train_dates"],
+            "train_values": forecast_result["train_values"],
             "validation_dates": forecast_result["test_dates"],
             "validation_actual": forecast_result["test_values"],
-            "future": build_forecast_series(forecast_result),
             "validation": build_validation_series(forecast_result),
         },
         "metrics_dashboard": metrics_dashboard,
