@@ -7,7 +7,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from statsmodels.tsa.holtwinters import ExponentialSmoothing, SimpleExpSmoothing
+from statsmodels.tsa.holtwinters import (
+    ExponentialSmoothing,
+    SimpleExpSmoothing,
+)
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 try:
@@ -16,9 +19,17 @@ except Exception:
     AutoARIMA = None
 
 
+# =========================================================
+# 1. 기본 설정
+# =========================================================
+
 SEASONAL_PERIOD = 12
 TEST_RATIO = 0.2
 
+
+# =========================================================
+# 2. 공통 유틸 함수
+# =========================================================
 
 def safe_float(value: Any) -> Optional[float]:
     try:
@@ -31,6 +42,7 @@ def safe_float(value: Any) -> Optional[float]:
             return None
 
         return round(value, 4)
+
     except Exception:
         return None
 
@@ -39,11 +51,20 @@ def serialize_array(values: Any) -> List[Optional[float]]:
     return [safe_float(value) for value in list(values)]
 
 
-def split_train_test(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
+# =========================================================
+# 3. Train / Test 분리
+# =========================================================
+
+def split_train_test(
+    series: pd.Series,
+) -> Tuple[pd.Series, pd.Series]:
+
     data_length = len(series)
 
     if data_length < 5:
-        raise ValueError("예측을 수행하기에는 데이터가 너무 적습니다. 최소 5개 이상의 데이터가 필요합니다.")
+        raise ValueError(
+            "예측을 수행하기에는 데이터가 너무 적습니다."
+        )
 
     test_size = max(1, int(data_length * TEST_RATIO))
 
@@ -56,17 +77,24 @@ def split_train_test(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
     return train, test
 
 
+# =========================================================
+# 4. Horizon 처리
+# =========================================================
+
 def resolve_horizon(
     horizon: Union[int, str],
     test: pd.Series,
 ) -> int:
+
     if horizon == "auto":
         return len(test)
 
     horizon_value = int(horizon)
 
     if horizon_value <= 0:
-        raise ValueError("시평 horizon은 1 이상이어야 합니다.")
+        raise ValueError(
+            "시평 horizon은 1 이상이어야 합니다."
+        )
 
     return horizon_value
 
@@ -75,28 +103,25 @@ def resolve_validation_length(
     horizon: int,
     test: pd.Series,
 ) -> int:
-    """
-    검증 예측 길이 설정
 
-    - horizon <= test 길이:
-      사용자가 지정한 horizon만큼 validation 예측 표시
-
-    - horizon > test 길이:
-      실제 y_test가 존재하는 구간까지만 validation 예측 표시
-
-    - y_test 자체는 전체 test 데이터를 유지
-    """
     return max(1, min(horizon, len(test)))
 
+
+# =========================================================
+# 5. 실패 결과 생성
+# =========================================================
 
 def build_failed_result(
     model_name: str,
     validation_length: int,
     error: Exception,
 ) -> Dict[str, Any]:
+
     return {
         "model": model_name,
-        "validation_pred": [None for _ in range(validation_length)],
+        "validation_pred": [
+            None for _ in range(validation_length)
+        ],
         "future_pred": [],
         "aic": None,
         "bic": None,
@@ -105,16 +130,32 @@ def build_failed_result(
     }
 
 
+# =========================================================
+# 6. Naive Forecast
+# =========================================================
+
 def forecast_naive(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
-    validation_length = resolve_validation_length(horizon, test)
+
+    validation_length = resolve_validation_length(
+        horizon,
+        test,
+    )
 
     last_value = train.iloc[-1]
-    validation_pred = np.repeat(last_value, validation_length)
-    future_pred = np.repeat(last_value, horizon)
+
+    validation_pred = np.repeat(
+        last_value,
+        validation_length,
+    )
+
+    future_pred = np.repeat(
+        last_value,
+        horizon,
+    )
 
     return {
         "model": "Naive",
@@ -123,25 +164,40 @@ def forecast_naive(
         "aic": None,
         "bic": None,
         "success": True,
-        "message": "Naive validation and future forecast completed.",
+        "message": "Naive forecast completed.",
     }
 
+
+# =========================================================
+# 7. Exponential Smoothing
+# =========================================================
 
 def forecast_exponential_smoothing(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
-    validation_length = resolve_validation_length(horizon, test)
+
+    validation_length = resolve_validation_length(
+        horizon,
+        test,
+    )
 
     try:
         model = SimpleExpSmoothing(
             train,
             initialization_method="estimated",
-        ).fit(optimized=True)
+        ).fit(
+            optimized=True
+        )
 
-        validation_pred = model.forecast(validation_length)
-        future_pred = model.forecast(horizon)
+        validation_pred = model.forecast(
+            validation_length
+        )
+
+        future_pred = model.forecast(
+            horizon
+        )
 
         return {
             "model": "Exponential Smoothing",
@@ -150,33 +206,58 @@ def forecast_exponential_smoothing(
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": "Exponential smoothing validation and future forecast completed.",
+            "message": "Exponential smoothing completed.",
         }
 
     except Exception as error:
-        return build_failed_result("Exponential Smoothing", validation_length, error)
+        return build_failed_result(
+            "Exponential Smoothing",
+            validation_length,
+            error,
+        )
 
+
+# =========================================================
+# 8. Holt-Winters
+# =========================================================
 
 def forecast_holt_winters(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
-    validation_length = resolve_validation_length(horizon, test)
+
+    validation_length = resolve_validation_length(
+        horizon,
+        test,
+    )
 
     try:
-        use_seasonal = len(train) >= SEASONAL_PERIOD * 2
+        use_seasonal = (
+            len(train) >= SEASONAL_PERIOD * 2
+        )
 
         model = ExponentialSmoothing(
             train,
             trend="add",
             seasonal="add" if use_seasonal else None,
-            seasonal_periods=SEASONAL_PERIOD if use_seasonal else None,
+            seasonal_periods=(
+                SEASONAL_PERIOD
+                if use_seasonal
+                else None
+            ),
             initialization_method="estimated",
-        ).fit(optimized=True)
+        ).fit(
+            optimized=True
+        )
 
-        validation_pred = model.forecast(validation_length)
-        future_pred = model.forecast(horizon)
+        validation_pred = model.forecast(
+            validation_length
+        )
+
+        future_pred = model.forecast(
+            horizon
+        )
 
         return {
             "model": "Holt-Winters",
@@ -185,19 +266,31 @@ def forecast_holt_winters(
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": "Holt-Winters validation and future forecast completed.",
+            "message": "Holt-Winters completed.",
         }
 
     except Exception as error:
-        return build_failed_result("Holt-Winters", validation_length, error)
+        return build_failed_result(
+            "Holt-Winters",
+            validation_length,
+            error,
+        )
 
+
+# =========================================================
+# 9. ARIMA Fallback
+# =========================================================
 
 def forecast_arima_fallback(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
-    validation_length = resolve_validation_length(horizon, test)
+
+    validation_length = resolve_validation_length(
+        horizon,
+        test,
+    )
 
     try:
         model = SARIMAX(
@@ -205,10 +298,18 @@ def forecast_arima_fallback(
             order=(1, 1, 1),
             enforce_stationarity=False,
             enforce_invertibility=False,
-        ).fit(disp=False, maxiter=50)
+        ).fit(
+            disp=False,
+            maxiter=20,
+        )
 
-        validation_pred = model.forecast(validation_length)
-        future_pred = model.forecast(horizon)
+        validation_pred = model.forecast(
+            validation_length
+        )
+
+        future_pred = model.forecast(
+            horizon
+        )
 
         return {
             "model": "AutoARIMA",
@@ -217,48 +318,101 @@ def forecast_arima_fallback(
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": "Fallback ARIMA(1,1,1) completed.",
+            "message": "Fallback ARIMA completed.",
         }
 
     except Exception as error:
         print("ARIMA FALLBACK ERROR:", error)
-        return forecast_naive(train, test, horizon)
 
+        return forecast_naive(
+            train,
+            test,
+            horizon,
+        )
+
+
+# =========================================================
+# 10. AutoARIMA
+# =========================================================
 
 def forecast_auto_arima(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
-    validation_length = resolve_validation_length(horizon, test)
+
+    validation_length = resolve_validation_length(
+        horizon,
+        test,
+    )
 
     try:
+
+        # sktime 사용 가능
         if AutoARIMA is not None:
+
+            # 계산량 최소화
             model = AutoARIMA(
-                max_p=2,
-                max_q=2,
+                max_p=1,
+                max_q=1,
+                max_d=1,
+
+                max_P=1,
+                max_Q=1,
+                max_D=1,
+                max_order=3,
+
                 sp=SEASONAL_PERIOD,
+                seasonal=True,
+
                 suppress_warnings=True,
                 stepwise=True,
                 error_action="ignore",
                 trace=False,
+
                 n_jobs=1,
+                maxiter=15,
             )
 
             model.fit(train)
 
-            validation_fh = list(range(1, validation_length + 1))
-            future_fh = list(range(1, horizon + 1))
+            validation_fh = list(
+                range(1, validation_length + 1)
+            )
 
-            validation_pred = model.predict(fh=validation_fh)
-            future_pred = model.predict(fh=future_fh)
+            future_fh = list(
+                range(1, horizon + 1)
+            )
+
+            validation_pred = model.predict(
+                fh=validation_fh
+            )
+
+            future_pred = model.predict(
+                fh=future_fh
+            )
 
             fitted_params = model.get_fitted_params()
 
-            order = fitted_params.get("order", None)
-            seasonal_order = fitted_params.get("seasonal_order", None)
-            aic = fitted_params.get("aic", None)
-            bic = fitted_params.get("bic", None)
+            order = fitted_params.get(
+                "order",
+                None,
+            )
+
+            seasonal_order = fitted_params.get(
+                "seasonal_order",
+                None,
+            )
+
+            aic = fitted_params.get(
+                "aic",
+                None,
+            )
+
+            bic = fitted_params.get(
+                "bic",
+                None,
+            )
 
             return {
                 "model": "AutoARIMA",
@@ -267,25 +421,42 @@ def forecast_auto_arima(
                 "aic": safe_float(aic),
                 "bic": safe_float(bic),
                 "success": True,
-                "message": f"AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
+                "message": (
+                    f"AutoARIMA completed. "
+                    f"order={order}, "
+                    f"seasonal_order={seasonal_order}"
+                ),
             }
 
-        return forecast_arima_fallback(train, test, horizon)
+        # sktime 없으면 fallback
+        return forecast_arima_fallback(
+            train,
+            test,
+            horizon,
+        )
 
     except Exception as error:
-        print("AutoARIMA ERROR:", error)
-        return forecast_arima_fallback(train, test, horizon)
 
+        print("AutoARIMA ERROR:", error)
+
+        return forecast_arima_fallback(
+            train,
+            test,
+            horizon,
+        )
+
+
+# =========================================================
+# 11. 미래 날짜 생성
+# =========================================================
 
 def make_future_dates(
     last_date: pd.Timestamp,
     horizon: int,
     frequency: Optional[str],
 ) -> List[str]:
-    if frequency:
-        freq = frequency
-    else:
-        freq = "MS"
+
+    freq = frequency if frequency else "MS"
 
     try:
         future_dates = pd.date_range(
@@ -293,15 +464,24 @@ def make_future_dates(
             periods=horizon + 1,
             freq=freq,
         )[1:]
+
     except Exception:
+
         future_dates = pd.date_range(
             start=last_date,
             periods=horizon + 1,
             freq="MS",
         )[1:]
 
-    return [date.strftime("%Y-%m-%d") for date in future_dates]
+    return [
+        date.strftime("%Y-%m-%d")
+        for date in future_dates
+    ]
 
+
+# =========================================================
+# 12. 전체 Forecast 실행
+# =========================================================
 
 def run_all_forecasts(
     df: pd.DataFrame,
@@ -309,29 +489,61 @@ def run_all_forecasts(
     frequency: Optional[str] = None,
     value_column: str = "value_preprocessed",
 ) -> Dict[str, Any]:
-    if value_column not in df.columns:
-        raise ValueError(f"{value_column} 컬럼을 찾을 수 없습니다.")
 
-    series = pd.Series(df[value_column].values, index=df["date"])
-    series = pd.to_numeric(series, errors="coerce")
-    series = series.interpolate(method="linear").ffill().bfill()
+    if value_column not in df.columns:
+        raise ValueError(
+            f"{value_column} 컬럼을 찾을 수 없습니다."
+        )
+
+    # 시계열 생성
+    series = pd.Series(
+        df[value_column].values,
+        index=df["date"],
+    )
+
+    # 숫자 변환
+    series = pd.to_numeric(
+        series,
+        errors="coerce",
+    )
+
+    # 결측 보간
+    series = (
+        series
+        .interpolate(method="linear")
+        .ffill()
+        .bfill()
+    )
 
     if len(series) < 5:
-        raise ValueError("예측을 수행하기에는 데이터가 너무 적습니다. 최소 5개 이상의 데이터가 필요합니다.")
+        raise ValueError(
+            "예측을 수행하기에는 데이터가 너무 적습니다."
+        )
 
-    train, test = split_train_test(series)
+    # train/test 분리
+    train, test = split_train_test(
+        series
+    )
 
+    # horizon 계산
     horizon_value = resolve_horizon(
         horizon=horizon,
         test=test,
     )
 
-    validation_length = resolve_validation_length(
-        horizon=horizon_value,
-        test=test,
+    # validation 길이
+    validation_length = (
+        resolve_validation_length(
+            horizon=horizon_value,
+            test=test,
+        )
     )
 
-    test_dates = [date.strftime("%Y-%m-%d") for date in test.index]
+    # 날짜 생성
+    test_dates = [
+        date.strftime("%Y-%m-%d")
+        for date in test.index
+    ]
 
     validation_dates = [
         date.strftime("%Y-%m-%d")
@@ -344,48 +556,78 @@ def run_all_forecasts(
         frequency=frequency,
     )
 
+    # =====================================================
+    # 모델 실행
+    # =====================================================
+
     model_results = {}
 
-    model_results["AutoARIMA"] = forecast_auto_arima(
-        train=train,
-        test=test,
-        horizon=horizon_value,
+    model_results["AutoARIMA"] = (
+        forecast_auto_arima(
+            train=train,
+            test=test,
+            horizon=horizon_value,
+        )
     )
 
-    model_results["Holt-Winters"] = forecast_holt_winters(
-        train=train,
-        test=test,
-        horizon=horizon_value,
+    model_results["Holt-Winters"] = (
+        forecast_holt_winters(
+            train=train,
+            test=test,
+            horizon=horizon_value,
+        )
     )
 
-    model_results["Exponential Smoothing"] = forecast_exponential_smoothing(
-        train=train,
-        test=test,
-        horizon=horizon_value,
+    model_results["Exponential Smoothing"] = (
+        forecast_exponential_smoothing(
+            train=train,
+            test=test,
+            horizon=horizon_value,
+        )
     )
 
-    model_results["Naive"] = forecast_naive(
-        train=train,
-        test=test,
-        horizon=horizon_value,
+    model_results["Naive"] = (
+        forecast_naive(
+            train=train,
+            test=test,
+            horizon=horizon_value,
+        )
     )
+
+    # =====================================================
+    # 결과 반환
+    # =====================================================
 
     return {
-        "train_values": serialize_array(train.values),
-        "test_values": serialize_array(test.values),
-        "train_dates": [date.strftime("%Y-%m-%d") for date in train.index],
 
-        # y_test는 전체 test 데이터 그대로 표시
+        # train
+        "train_values": serialize_array(
+            train.values
+        ),
+
+        "train_dates": [
+            date.strftime("%Y-%m-%d")
+            for date in train.index
+        ],
+
+        # test
+        "test_values": serialize_array(
+            test.values
+        ),
+
         "test_dates": test_dates,
 
-        # validation prediction은 horizon과 test 길이 중 작은 값만큼 표시
+        # validation
         "validation_dates": validation_dates,
         "validation_length": validation_length,
 
-        # future prediction은 사용자가 입력한 horizon만큼 생성
+        # future
         "future_dates": future_dates,
 
+        # info
         "seasonal_period": SEASONAL_PERIOD,
         "horizon": horizon_value,
+
+        # results
         "model_results": model_results,
     }
