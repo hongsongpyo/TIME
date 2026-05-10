@@ -388,7 +388,7 @@ function isAutoHorizonEnabled() {
 
 function getCurrentHorizonValue() {
   if (isAutoHorizonEnabled()) {
-    return "auto";
+    return getAutoHorizonValue();
   }
 
   return horizonInput ? Number(horizonInput.value) : 12;
@@ -404,7 +404,17 @@ function updateHorizonInputState() {
   }
 }
 
+function getAutoHorizonValue() {
+  const dataLength = tableData ? tableData.length : 0;
 
+  if (dataLength <= 1) {
+    return 1;
+  }
+
+  const testLength = Math.floor(dataLength * 0.2);
+
+  return Math.max(1, testLength);
+}
 /* =========================================================
    11. 자동 분석 실행
 ========================================================= */

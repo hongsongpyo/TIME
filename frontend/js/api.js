@@ -30,7 +30,21 @@ async function handleResponse(response) {
   }
 
   if (!response.ok) {
-    const message = data.detail || "요청 처리 중 오류가 발생했습니다.";
+    let message = "요청 처리 중 오류가 발생했습니다.";
+
+    if (typeof data.detail === "string") {
+      message = data.detail;
+    } else if (Array.isArray(data.detail)) {
+      message = data.detail
+        .map((err) => {
+          const loc = err.loc ? err.loc.join(".") : "";
+          return `${loc}: ${err.msg}`;
+        })
+        .join("\n");
+    } else if (data.detail && typeof data.detail === "object") {
+      message = JSON.stringify(data.detail, null, 2);
+    }
+
     throw new Error(message);
   }
 
