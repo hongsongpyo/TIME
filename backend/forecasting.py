@@ -71,6 +71,24 @@ def resolve_horizon(
     return horizon_value
 
 
+def resolve_validation_length(
+    horizon: int,
+    test: pd.Series,
+) -> int:
+    """
+    검증 예측 길이 설정
+
+    - horizon <= test 길이:
+      사용자가 지정한 horizon만큼 validation 예측 표시
+
+    - horizon > test 길이:
+      실제 y_test가 존재하는 구간까지만 validation 예측 표시
+
+    - y_test 자체는 전체 test 데이터를 유지
+    """
+    return max(1, min(horizon, len(test)))
+
+
 def build_failed_result(
     model_name: str,
     validation_length: int,
@@ -92,8 +110,10 @@ def forecast_naive(
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
+    validation_length = resolve_validation_length(horizon, test)
+
     last_value = train.iloc[-1]
-    validation_pred = np.repeat(last_value, len(test))
+    validation_pred = np.repeat(last_value, validation_length)
     future_pred = np.repeat(last_value, horizon)
 
     return {
@@ -112,13 +132,15 @@ def forecast_exponential_smoothing(
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
+    validation_length = resolve_validation_length(horizon, test)
+
     try:
         model = SimpleExpSmoothing(
             train,
             initialization_method="estimated",
         ).fit(optimized=True)
 
-        validation_pred = model.forecast(len(test))
+        validation_pred = model.forecast(validation_length)
         future_pred = model.forecast(horizon)
 
         return {
@@ -132,7 +154,7 @@ def forecast_exponential_smoothing(
         }
 
     except Exception as error:
-        return build_failed_result("Exponential Smoothing", len(test), error)
+        return build_failed_result("Exponential Smoothing", validation_length, error)
 
 
 def forecast_holt_winters(
@@ -140,6 +162,8 @@ def forecast_holt_winters(
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
+    validation_length = resolve_validation_length(horizon, test)
+
     try:
         use_seasonal = len(train) >= SEASONAL_PERIOD * 2
 
@@ -151,7 +175,7 @@ def forecast_holt_winters(
             initialization_method="estimated",
         ).fit(optimized=True)
 
-        validation_pred = model.forecast(len(test))
+        validation_pred = model.forecast(validation_length)
         future_pred = model.forecast(horizon)
 
         return {
@@ -165,7 +189,7 @@ def forecast_holt_winters(
         }
 
     except Exception as error:
-        return build_failed_result("Holt-Winters", len(test), error)
+        return build_failed_result("Holt-Winters", validation_length, error)
 
 
 def forecast_arima_fallback(
@@ -173,6 +197,8 @@ def forecast_arima_fallback(
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
+    validation_length = resolve_validation_length(horizon, test)
+
     try:
         model = SARIMAX(
             train,
@@ -181,7 +207,7 @@ def forecast_arima_fallback(
             enforce_invertibility=False,
         ).fit(disp=False, maxiter=50)
 
-        validation_pred = model.forecast(len(test))
+        validation_pred = model.forecast(validation_length)
         future_pred = model.forecast(horizon)
 
         return {
@@ -204,6 +230,8 @@ def forecast_auto_arima(
     test: pd.Series,
     horizon: int,
 ) -> Dict[str, Any]:
+    validation_length = resolve_validation_length(horizon, test)
+
     try:
         if AutoARIMA is not None:
             model = AutoARIMA(
@@ -219,7 +247,7 @@ def forecast_auto_arima(
 
             model.fit(train)
 
-            validation_fh = list(range(1, len(test) + 1))
+            validation_fh = list(range(1, validation_length + 1))
             future_fh = list(range(1, horizon + 1))
 
             validation_pred = model.predict(fh=validation_fh)
@@ -298,7 +326,18 @@ def run_all_forecasts(
         test=test,
     )
 
-    validation_dates = [date.strftime("%Y-%m-%d") for date in test.index]
+    validation_length = resolve_validation_length(
+        horizon=horizon_value,
+        test=test,
+    )
+
+    test_dates = [date.strftime("%Y-%m-%d") for date in test.index]
+
+    validation_dates = [
+        date.strftime("%Y-%m-%d")
+        for date in test.index[:validation_length]
+    ]
+
     future_dates = make_future_dates(
         last_date=series.index[-1],
         horizon=horizon_value,
@@ -335,8 +374,17 @@ def run_all_forecasts(
         "train_values": serialize_array(train.values),
         "test_values": serialize_array(test.values),
         "train_dates": [date.strftime("%Y-%m-%d") for date in train.index],
-        "test_dates": validation_dates,
+
+        # y_test는 전체 test 데이터 그대로 표시
+        "test_dates": test_dates,
+
+        # validation prediction은 horizon과 test 길이 중 작은 값만큼 표시
+        "validation_dates": validation_dates,
+        "validation_length": validation_length,
+
+        # future prediction은 사용자가 입력한 horizon만큼 생성
         "future_dates": future_dates,
+
         "seasonal_period": SEASONAL_PERIOD,
         "horizon": horizon_value,
         "model_results": model_results,
