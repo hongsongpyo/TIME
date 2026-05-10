@@ -82,9 +82,13 @@ async function runAnalysis(tableData, horizon, protectedCells) {
     throw new Error("분석할 데이터가 없습니다.");
   }
 
+  if (horizon !== "auto" && (!Number(horizon) || Number(horizon) <= 0)) {
+    throw new Error("시평은 1 이상의 숫자이거나 auto여야 합니다.");
+  }
+
   const payload = {
     data: tableData,
-    horizon: Number(horizon),
+    horizon: horizon === "auto" ? "auto" : Number(horizon),
     protected_cells: protectedCells || [],
   };
 

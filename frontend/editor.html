@@ -30,15 +30,25 @@
         </div>
 
         <div class="toolbar-right">
-          <label class="horizon-field">
-            <span>시평</span>
-            <input
-              id="horizonInput"
-              type="number"
-              min="1"
-              value="12"
-            />
-          </label>
+          <div class="horizon-field">
+            <label for="horizonInput">
+              <span>시평</span>
+              <input
+                id="horizonInput"
+                type="number"
+                min="1"
+                value="12"
+              />
+            </label>
+
+            <label class="auto-horizon-field">
+              <input
+                id="autoHorizonInput"
+                type="checkbox"
+              />
+              <span>Test 데이터 길이와 동일</span>
+            </label>
+          </div>
 
           <button id="addRowButton" class="tool-button" type="button">
             행 추가

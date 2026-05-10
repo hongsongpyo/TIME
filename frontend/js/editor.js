@@ -8,7 +8,8 @@
 4. 행 추가
 5. 열 추가
 6. 특이치 설정 모드 관리
-7. 자동 분석 실행 후 result.html로 이동
+7. 시평 직접 입력 / Test 데이터 길이와 동일 옵션 관리
+8. 자동 분석 실행 후 result.html로 이동
 ========================================================= */
 
 let tableData = [];
@@ -19,6 +20,7 @@ let specialMode = false;
 let tableHead = null;
 let tableBody = null;
 let horizonInput = null;
+let autoHorizonInput = null;
 let editorStatus = null;
 let isAnalyzing = false;
 
@@ -31,11 +33,13 @@ document.addEventListener("DOMContentLoaded", () => {
   tableHead = document.getElementById("tableHead");
   tableBody = document.getElementById("tableBody");
   horizonInput = document.getElementById("horizonInput");
+  autoHorizonInput = document.getElementById("autoHorizonInput");
   editorStatus = document.getElementById("editorStatus");
 
   bindEditorEvents();
   loadEditorData();
   renderTable();
+  updateHorizonInputState();
 });
 
 
@@ -78,6 +82,13 @@ function bindEditorEvents() {
       saveCurrentState();
     });
   }
+
+  if (autoHorizonInput) {
+    autoHorizonInput.addEventListener("change", () => {
+      updateHorizonInputState();
+      saveCurrentState();
+    });
+  }
 }
 
 
@@ -93,7 +104,19 @@ function loadEditorData() {
   const horizon = window.TIMEStorage.loadHorizon();
 
   if (horizonInput) {
-    horizonInput.value = horizon || 12;
+    if (horizon === "auto") {
+      horizonInput.value = 12;
+
+      if (autoHorizonInput) {
+        autoHorizonInput.checked = true;
+      }
+    } else {
+      horizonInput.value = horizon || 12;
+
+      if (autoHorizonInput) {
+        autoHorizonInput.checked = false;
+      }
+    }
   }
 
   if (!tableData || tableData.length === 0) {
@@ -356,7 +379,34 @@ function toggleProtectedCell(rowIndex, columnName) {
 
 
 /* =========================================================
-   10. 자동 분석 실행
+   10. 시평 설정
+========================================================= */
+
+function isAutoHorizonEnabled() {
+  return Boolean(autoHorizonInput && autoHorizonInput.checked);
+}
+
+function getCurrentHorizonValue() {
+  if (isAutoHorizonEnabled()) {
+    return "auto";
+  }
+
+  return horizonInput ? Number(horizonInput.value) : 12;
+}
+
+function updateHorizonInputState() {
+  if (!horizonInput) return;
+
+  horizonInput.disabled = isAutoHorizonEnabled();
+
+  if (isAutoHorizonEnabled()) {
+    setEditorStatus("시평이 Test 데이터 길이와 동일하게 자동 설정됩니다.");
+  }
+}
+
+
+/* =========================================================
+   11. 자동 분석 실행
 ========================================================= */
 
 async function handleRunAnalysis() {
@@ -369,9 +419,9 @@ async function handleRunAnalysis() {
     return;
   }
 
-  const horizon = Number(horizonInput.value);
+  const horizon = getCurrentHorizonValue();
 
-  if (!horizon || horizon <= 0) {
+  if (horizon !== "auto" && (!horizon || horizon <= 0)) {
     setEditorStatus("시평은 1 이상의 숫자로 입력하세요.");
     return;
   }
@@ -417,16 +467,20 @@ function setEditorLock(locked) {
     cell.contentEditable = locked ? "false" : "true";
   });
 
+  if (!locked) {
+    updateHorizonInputState();
+  }
+
   document.body.classList.toggle("analyzing", locked);
 }
 
 
 /* =========================================================
-   11. 현재 상태 저장
+   12. 현재 상태 저장
 ========================================================= */
 
 function saveCurrentState() {
-  const horizon = horizonInput ? Number(horizonInput.value) : 12;
+  const horizon = getCurrentHorizonValue();
 
   window.TIMEStorage.saveTableData(tableData);
   window.TIMEStorage.saveColumnNames(columnNames);
@@ -436,7 +490,7 @@ function saveCurrentState() {
 
 
 /* =========================================================
-   12. 상태 메시지
+   13. 상태 메시지
 ========================================================= */
 
 function setEditorStatus(message) {
