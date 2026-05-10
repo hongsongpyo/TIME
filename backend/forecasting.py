@@ -1,13 +1,5 @@
 # =========================================================
 # TIME - backend/forecasting.py
-# ---------------------------------------------------------
-# 역할
-# 1. 전처리된 시계열 데이터를 학습/검증 데이터로 분리
-# 2. horizon 만큼 마지막 데이터를 test 데이터로 사용
-# 3. train 데이터로 모델 학습
-# 4. test 구간에 대한 validation 예측만 생성
-# 5. AutoARIMA, Holt-Winters, Exponential Smoothing, Naive 비교
-# 6. AIC, BIC 값 반환
 # =========================================================
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,10 +15,6 @@ try:
 except Exception:
     AutoARIMA = None
 
-
-# =========================================================
-# 1. 기본 유틸
-# =========================================================
 
 def safe_float(value: Any) -> Optional[float]:
     try:
@@ -44,52 +32,34 @@ def safe_float(value: Any) -> Optional[float]:
 
 
 def serialize_array(values: Any) -> List[Optional[float]]:
-    result = []
+    return [safe_float(value) for value in list(values)]
 
-    for value in list(values):
-        result.append(safe_float(value))
-
-    return result
-
-
-# =========================================================
-# 2. 계절 주기 추정
-# =========================================================
 
 def infer_seasonal_period(frequency: Optional[str], data_length: int) -> int:
     if data_length < 4:
         return 1
 
     if not frequency:
-        return max(1, min(7, data_length // 3))
+        return max(2, min(4, data_length // 2))
 
     freq = str(frequency).upper()
 
     if freq.startswith("D"):
         period = 7
     elif freq.startswith("W"):
-        period = 52
+        period = 4
     elif freq.startswith("M"):
         period = 12
     elif freq.startswith("Q"):
         period = 4
     else:
-        period = 1
-
-    if period < 2:
-        return 1
+        period = max(2, min(4, data_length // 2))
 
     if data_length < period * 2:
-        return 1
+        return max(2, min(4, data_length // 2))
 
-    return period
+    return min(period, 12)
 
-
-# =========================================================
-# 3. Train / Test 분리
-# ---------------------------------------------------------
-# 사용자가 설정한 horizon 만큼 마지막 데이터를 test로 사용
-# =========================================================
 
 def split_train_test(
     series: pd.Series,
@@ -112,9 +82,20 @@ def split_train_test(
     return train, test
 
 
-# =========================================================
-# 4. Naive Forecast
-# =========================================================
+def build_failed_result(
+    model_name: str,
+    validation_length: int,
+    error: Exception,
+) -> Dict[str, Any]:
+    return {
+        "model": model_name,
+        "validation_pred": [None for _ in range(validation_length)],
+        "aic": None,
+        "bic": None,
+        "success": False,
+        "message": str(error),
+    }
+
 
 def forecast_naive(
     train: pd.Series,
@@ -132,10 +113,6 @@ def forecast_naive(
         "message": "Naive validation forecast completed.",
     }
 
-
-# =========================================================
-# 5. Exponential Smoothing
-# =========================================================
 
 def forecast_exponential_smoothing(
     train: pd.Series,
@@ -162,17 +139,17 @@ def forecast_exponential_smoothing(
         return build_failed_result("Exponential Smoothing", len(test), error)
 
 
-# =========================================================
-# 6. Holt-Winters Forecast
-# =========================================================
-
 def forecast_holt_winters(
     train: pd.Series,
     test: pd.Series,
     seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
-        use_seasonal = seasonal_period >= 2 and len(train) >= seasonal_period * 2
+        use_seasonal = (
+            seasonal_period >= 2
+            and seasonal_period <= 12
+            and len(train) >= seasonal_period * 2
+        )
 
         model = ExponentialSmoothing(
             train,
@@ -197,13 +174,51 @@ def forecast_holt_winters(
         return build_failed_result("Holt-Winters", len(test), error)
 
 
-# =========================================================
-# 7. AutoARIMA Forecast
-# ---------------------------------------------------------
-# sktime AutoARIMA 사용
-# SARIMA 계절성 탐색 포함
-# sp는 최대 12로 제한
-# =========================================================
+def get_safe_sp(train: pd.Series, seasonal_period: int) -> int:
+    sp = int(seasonal_period)
+
+    if sp < 2:
+        sp = max(2, min(4, len(train) // 2))
+
+    sp = min(sp, 12)
+
+    if len(train) < sp * 2:
+        sp = max(2, min(4, len(train) // 2))
+
+    return max(2, sp)
+
+
+def forecast_sarimax_fallback(
+    train: pd.Series,
+    test: pd.Series,
+    seasonal_period: int,
+) -> Dict[str, Any]:
+    try:
+        sp = get_safe_sp(train, seasonal_period)
+
+        model = SARIMAX(
+            train,
+            order=(1, 1, 1),
+            seasonal_order=(1, 0, 1, sp),
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        ).fit(disp=False)
+
+        validation_pred = model.forecast(len(test))
+
+        return {
+            "model": "AutoARIMA-SARIMA",
+            "validation_pred": serialize_array(validation_pred),
+            "aic": safe_float(getattr(model, "aic", None)),
+            "bic": safe_float(getattr(model, "bic", None)),
+            "success": True,
+            "message": f"Fallback SARIMAX completed. seasonal_order=(1,0,1,{sp})",
+        }
+
+    except Exception as error:
+        print("SARIMAX FALLBACK ERROR:", error)
+        return forecast_naive(train, test)
+
 
 def forecast_auto_arima(
     train: pd.Series,
@@ -211,28 +226,14 @@ def forecast_auto_arima(
     seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
+        sp = get_safe_sp(train, seasonal_period)
+
         if AutoARIMA is not None:
-            # 과제 데이터는 계절성이 있다고 가정
-            # 단, sp가 1 이하이면 기본 월별 계절성 12로 보정
-            sp = int(seasonal_period)
-
-            if sp < 2:
-                sp = 12
-
-            # 계산량 폭증 방지를 위해 최대 12까지만 사용
-            sp = min(sp, 12)
-
-            # SARIMA는 최소 2주기 이상 데이터가 있을 때 안정적
-            # 데이터가 너무 짧으면 AutoARIMA 내부 오류 가능성이 커서 sp를 완화
-            if len(train) < sp * 2:
-                sp = max(2, min(4, len(train) // 2))
-
             model = AutoARIMA(
                 max_p=2,
                 max_q=2,
                 max_d=2,
 
-                # SARIMA 고정
                 seasonal=True,
                 sp=sp,
 
@@ -241,7 +242,6 @@ def forecast_auto_arima(
                 max_D=1,
                 max_order=4,
 
-                # 계산 시간 감소 옵션
                 stepwise=True,
                 error_action="ignore",
                 suppress_warnings=True,
@@ -271,58 +271,12 @@ def forecast_auto_arima(
                 "message": f"SARIMA AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
             }
 
-        # AutoARIMA를 사용할 수 없을 때만 고정 SARIMAX fallback
-        sp = int(seasonal_period)
-
-        if sp < 2:
-            sp = 12
-
-        sp = min(sp, 12)
-
-        model = SARIMAX(
-            train,
-            order=(1, 1, 1),
-            seasonal_order=(1, 1, 1, sp),
-            enforce_stationarity=False,
-            enforce_invertibility=False,
-        ).fit(disp=False)
-
-        validation_pred = model.forecast(len(test))
-
-        return {
-            "model": "AutoARIMA-SARIMA",
-            "validation_pred": serialize_array(validation_pred),
-            "aic": safe_float(getattr(model, "aic", None)),
-            "bic": safe_float(getattr(model, "bic", None)),
-            "success": True,
-            "message": "Fallback SARIMAX seasonal validation completed.",
-        }
+        return forecast_sarimax_fallback(train, test, seasonal_period)
 
     except Exception as error:
-        return build_failed_result("AutoARIMA-SARIMA", len(test), error)
+        print("AutoARIMA ERROR:", error)
+        return forecast_sarimax_fallback(train, test, seasonal_period)
 
-# =========================================================
-# 8. 실패 결과 생성
-# =========================================================
-
-def build_failed_result(
-    model_name: str,
-    validation_length: int,
-    error: Exception,
-) -> Dict[str, Any]:
-    return {
-        "model": model_name,
-        "validation_pred": [None for _ in range(validation_length)],
-        "aic": None,
-        "bic": None,
-        "success": False,
-        "message": str(error),
-    }
-
-
-# =========================================================
-# 9. 전체 예측 실행
-# =========================================================
 
 def run_all_forecasts(
     df: pd.DataFrame,
