@@ -127,7 +127,7 @@ def run_time_series_analysis(
 
     # STL / decomposition 단계에서 추정된 주기
     seasonal_period = decomposition_result.get("period")
-
+    print("STL seasonal_period =", seasonal_period)
     forecast_result = run_all_forecasts(
         df=processed_df,
         horizon=horizon,
