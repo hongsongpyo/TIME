@@ -212,20 +212,42 @@ def forecast_auto_arima(
 ) -> Dict[str, Any]:
     try:
         if AutoARIMA is not None:
-            use_seasonal = seasonal_period >= 2 and len(train) >= seasonal_period * 2
-            sp = min(seasonal_period, 12) if use_seasonal else 1
+            # 과제 데이터는 계절성이 있다고 가정
+            # 단, sp가 1 이하이면 기본 월별 계절성 12로 보정
+            sp = int(seasonal_period)
+
+            if sp < 2:
+                sp = 12
+
+            # 계산량 폭증 방지를 위해 최대 12까지만 사용
+            sp = min(sp, 12)
+
+            # SARIMA는 최소 2주기 이상 데이터가 있을 때 안정적
+            # 데이터가 너무 짧으면 AutoARIMA 내부 오류 가능성이 커서 sp를 완화
+            if len(train) < sp * 2:
+                sp = max(2, min(4, len(train) // 2))
 
             model = AutoARIMA(
                 max_p=3,
                 max_q=3,
                 max_d=2,
-                seasonal=use_seasonal,
+
+                # SARIMA 고정
+                seasonal=True,
                 sp=sp,
+
                 max_P=2,
                 max_Q=2,
-                max_D=2,
+                max_D=1,
                 max_order=6,
+
+                # 계산 시간 감소 옵션
+                stepwise=True,
+                error_action="ignore",
                 suppress_warnings=True,
+                trace=False,
+                n_jobs=1,
+                information_criterion="aic",
             )
 
             model.fit(train)
@@ -241,17 +263,26 @@ def forecast_auto_arima(
             bic = fitted_params.get("bic", None)
 
             return {
-                "model": "AutoARIMA",
+                "model": "AutoARIMA-SARIMA",
                 "validation_pred": serialize_array(validation_pred),
                 "aic": safe_float(aic),
                 "bic": safe_float(bic),
                 "success": True,
-                "message": f"AutoARIMA validation completed. order={order}, seasonal_order={seasonal_order}",
+                "message": f"SARIMA AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
             }
+
+        # AutoARIMA를 사용할 수 없을 때만 고정 SARIMAX fallback
+        sp = int(seasonal_period)
+
+        if sp < 2:
+            sp = 12
+
+        sp = min(sp, 12)
 
         model = SARIMAX(
             train,
             order=(1, 1, 1),
+            seasonal_order=(1, 1, 1, sp),
             enforce_stationarity=False,
             enforce_invertibility=False,
         ).fit(disp=False)
@@ -259,17 +290,16 @@ def forecast_auto_arima(
         validation_pred = model.forecast(len(test))
 
         return {
-            "model": "AutoARIMA",
+            "model": "AutoARIMA-SARIMA",
             "validation_pred": serialize_array(validation_pred),
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": "AutoARIMA fallback SARIMAX validation completed.",
+            "message": "Fallback SARIMAX seasonal validation completed.",
         }
 
     except Exception as error:
-        return build_failed_result("AutoARIMA", len(test), error)
-
+        return build_failed_result("AutoARIMA-SARIMA", len(test), error)
 
 # =========================================================
 # 8. 실패 결과 생성
