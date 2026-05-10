@@ -28,6 +28,11 @@ try:
 except Exception:
     auto_arima = None
 
+try:
+    from sktime.forecasting.arima import AutoARIMA
+except Exception:
+    AutoARIMA = None
+
 
 # =========================================================
 # 2. 기본 유틸
@@ -271,15 +276,11 @@ def forecast_auto_arima(
     seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
-        if auto_arima is not None:
-            validation_model = auto_arima(
-                train,
-                seasonal=False,
-                m=1,
-                stepwise=True,
-                suppress_warnings=True,
-                error_action="ignore",
-                trace=False,
+        if AutoARIMA is not None:
+            use_seasonal = seasonal_period >= 2 and len(train) >= seasonal_period * 2
+            sp = seasonal_period if use_seasonal else 1
+
+            validation_model = AutoARIMA(
                 max_p=3,
                 max_q=3,
                 max_d=2,
@@ -287,19 +288,17 @@ def forecast_auto_arima(
                 max_Q=1,
                 max_D=1,
                 max_order=5,
-                n_jobs=1,
+                sp=sp,
+                seasonal=use_seasonal,
+                suppress_warnings=True,
             )
 
-            validation_pred = validation_model.predict(n_periods=len(test))
+            validation_model.fit(train)
 
-            final_model = auto_arima(
-                full_series,
-                seasonal=False,
-                m=1,
-                stepwise=True,
-                suppress_warnings=True,
-                error_action="ignore",
-                trace=False,
+            validation_fh = list(range(1, len(test) + 1))
+            validation_pred = validation_model.predict(fh=validation_fh)
+
+            final_model = AutoARIMA(
                 max_p=3,
                 max_q=3,
                 max_d=2,
@@ -307,19 +306,31 @@ def forecast_auto_arima(
                 max_Q=1,
                 max_D=1,
                 max_order=5,
-                n_jobs=1,
+                sp=sp,
+                seasonal=use_seasonal,
+                suppress_warnings=True,
             )
 
-            future_pred = final_model.predict(n_periods=horizon)
+            final_model.fit(full_series)
+
+            future_fh = list(range(1, horizon + 1))
+            future_pred = final_model.predict(fh=future_fh)
+
+            fitted_params = final_model.get_fitted_params()
+            order = fitted_params.get("order", None)
+            seasonal_order = fitted_params.get("seasonal_order", None)
+
+            aic = fitted_params.get("aic", None)
+            bic = fitted_params.get("bic", None)
 
             return {
                 "model": "AutoARIMA",
                 "validation_pred": serialize_array(validation_pred),
                 "future_pred": serialize_array(future_pred),
-                "aic": safe_float(final_model.aic()),
-                "bic": safe_float(final_model.bic()),
+                "aic": safe_float(aic),
+                "bic": safe_float(bic),
                 "success": True,
-                "message": "AutoARIMA forecast completed.",
+                "message": f"AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
             }
 
         validation_model = SARIMAX(
@@ -352,7 +363,6 @@ def forecast_auto_arima(
 
     except Exception as error:
         return build_failed_result("AutoARIMA", len(test), horizon, error)
-
 
 # =========================================================
 # 8. 실패 결과 생성
