@@ -16,6 +16,9 @@ except Exception:
     AutoARIMA = None
 
 
+SEASONAL_PERIOD = 12
+
+
 def safe_float(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -33,32 +36,6 @@ def safe_float(value: Any) -> Optional[float]:
 
 def serialize_array(values: Any) -> List[Optional[float]]:
     return [safe_float(value) for value in list(values)]
-
-
-def infer_seasonal_period(frequency: Optional[str], data_length: int) -> int:
-    if data_length < 4:
-        return 1
-
-    if not frequency:
-        return max(2, min(4, data_length // 2))
-
-    freq = str(frequency).upper()
-
-    if freq.startswith("D"):
-        period = 7
-    elif freq.startswith("W"):
-        period = 4
-    elif freq.startswith("M"):
-        period = 12
-    elif freq.startswith("Q"):
-        period = 4
-    else:
-        period = max(2, min(4, data_length // 2))
-
-    if data_length < period * 2:
-        return max(2, min(4, data_length // 2))
-
-    return min(period, 12)
 
 
 def split_train_test(
@@ -142,20 +119,15 @@ def forecast_exponential_smoothing(
 def forecast_holt_winters(
     train: pd.Series,
     test: pd.Series,
-    seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
-        use_seasonal = (
-            seasonal_period >= 2
-            and seasonal_period <= 12
-            and len(train) >= seasonal_period * 2
-        )
+        use_seasonal = len(train) >= SEASONAL_PERIOD * 2
 
         model = ExponentialSmoothing(
             train,
             trend="add",
             seasonal="add" if use_seasonal else None,
-            seasonal_periods=seasonal_period if use_seasonal else None,
+            seasonal_periods=SEASONAL_PERIOD if use_seasonal else None,
             initialization_method="estimated",
         ).fit(optimized=True)
 
@@ -174,80 +146,49 @@ def forecast_holt_winters(
         return build_failed_result("Holt-Winters", len(test), error)
 
 
-def get_safe_sp(train: pd.Series, seasonal_period: int) -> int:
-    sp = int(seasonal_period)
-
-    if sp < 2:
-        sp = max(2, min(4, len(train) // 2))
-
-    sp = min(sp, 12)
-
-    if len(train) < sp * 2:
-        sp = max(2, min(4, len(train) // 2))
-
-    return max(2, sp)
-
-
-def forecast_sarimax_fallback(
+def forecast_arima_fallback(
     train: pd.Series,
     test: pd.Series,
-    seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
-        sp = get_safe_sp(train, seasonal_period)
-
         model = SARIMAX(
             train,
             order=(1, 1, 1),
-            seasonal_order=(1, 0, 1, sp),
             enforce_stationarity=False,
             enforce_invertibility=False,
-        ).fit(disp=False)
+        ).fit(disp=False, maxiter=50)
 
         validation_pred = model.forecast(len(test))
 
         return {
-            "model": "AutoARIMA-SARIMA",
+            "model": "AutoARIMA",
             "validation_pred": serialize_array(validation_pred),
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": f"Fallback SARIMAX completed. seasonal_order=(1,0,1,{sp})",
+            "message": "Fallback ARIMA(1,1,1) completed.",
         }
 
     except Exception as error:
-        print("SARIMAX FALLBACK ERROR:", error)
+        print("ARIMA FALLBACK ERROR:", error)
         return forecast_naive(train, test)
 
 
 def forecast_auto_arima(
     train: pd.Series,
     test: pd.Series,
-    seasonal_period: int,
 ) -> Dict[str, Any]:
     try:
-        sp = get_safe_sp(train, seasonal_period)
-
         if AutoARIMA is not None:
             model = AutoARIMA(
                 max_p=2,
                 max_q=2,
-                max_d=2,
-
-                seasonal=True,
-                sp=sp,
-
-                max_P=1,
-                max_Q=1,
-                max_D=1,
-                max_order=4,
-
+                sp=SEASONAL_PERIOD,
+                suppress_warnings=True,
                 stepwise=True,
                 error_action="ignore",
-                suppress_warnings=True,
                 trace=False,
                 n_jobs=1,
-                information_criterion="aic",
             )
 
             model.fit(train)
@@ -263,19 +204,19 @@ def forecast_auto_arima(
             bic = fitted_params.get("bic", None)
 
             return {
-                "model": "AutoARIMA-SARIMA",
+                "model": "AutoARIMA",
                 "validation_pred": serialize_array(validation_pred),
                 "aic": safe_float(aic),
                 "bic": safe_float(bic),
                 "success": True,
-                "message": f"SARIMA AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
+                "message": f"AutoARIMA completed. order={order}, seasonal_order={seasonal_order}",
             }
 
-        return forecast_sarimax_fallback(train, test, seasonal_period)
+        return forecast_arima_fallback(train, test)
 
     except Exception as error:
         print("AutoARIMA ERROR:", error)
-        return forecast_sarimax_fallback(train, test, seasonal_period)
+        return forecast_arima_fallback(train, test)
 
 
 def run_all_forecasts(
@@ -298,8 +239,6 @@ def run_all_forecasts(
 
     train, test = split_train_test(series, horizon)
 
-    seasonal_period = infer_seasonal_period(frequency, len(series))
-
     validation_dates = [date.strftime("%Y-%m-%d") for date in test.index]
 
     model_results = {}
@@ -307,13 +246,11 @@ def run_all_forecasts(
     model_results["AutoARIMA"] = forecast_auto_arima(
         train=train,
         test=test,
-        seasonal_period=seasonal_period,
     )
 
     model_results["Holt-Winters"] = forecast_holt_winters(
         train=train,
         test=test,
-        seasonal_period=seasonal_period,
     )
 
     model_results["Exponential Smoothing"] = forecast_exponential_smoothing(
@@ -331,6 +268,6 @@ def run_all_forecasts(
         "test_values": serialize_array(test.values),
         "train_dates": [date.strftime("%Y-%m-%d") for date in train.index],
         "test_dates": validation_dates,
-        "seasonal_period": seasonal_period,
+        "seasonal_period": SEASONAL_PERIOD,
         "model_results": model_results,
     }
