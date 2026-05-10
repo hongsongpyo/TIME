@@ -228,8 +228,8 @@ def forecast_auto_arima(
                 sp = max(2, min(4, len(train) // 2))
 
             model = AutoARIMA(
-                max_p=3,
-                max_q=3,
+                max_p=2,
+                max_q=2,
                 max_d=2,
 
                 # SARIMA 고정
