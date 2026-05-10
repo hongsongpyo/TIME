@@ -1,10 +1,5 @@
 # =========================================================
 # TIME - backend/analysis.py
-# ---------------------------------------------------------
-# 역할
-# 1. 전체 자동 시계열 분석 흐름 실행
-# 2. 전처리 → 분해 → 예측 → 평가지표 계산
-# 3. 프론트엔드 result.html에서 사용할 JSON 구조 생성
 # =========================================================
 
 from typing import Any, Dict, List, Optional
@@ -16,10 +11,6 @@ from decomposition import decompose_time_series
 from forecasting import run_all_forecasts
 from metrics import build_metrics_dashboard, get_best_model
 
-
-# =========================================================
-# 1. DataFrame 포인트 직렬화
-# =========================================================
 
 def serialize_points(
     points_df: pd.DataFrame,
@@ -40,29 +31,20 @@ def serialize_points(
     }
 
 
-# =========================================================
-# 2. 모델별 미래 예측값 정리
-# =========================================================
-
-
-
-
-# =========================================================
-# 3. 모델별 검증 예측값 정리
-# =========================================================
-
-def build_validation_series(
+def build_future_series(
     forecast_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    test_dates = forecast_result.get("test_dates", [])
+    future_dates = forecast_result.get("future_dates", [])
     model_results = forecast_result.get("model_results", {})
 
     series = {}
 
     for model_name, result in model_results.items():
+        future_pred = result.get("future_pred", [])
+
         series[model_name] = {
-            "date": test_dates,
-            "value": result.get("validation_pred", []),
+            "date": future_dates[:len(future_pred)],
+            "value": future_pred,
             "success": result.get("success", False),
             "message": result.get("message", ""),
         }
@@ -70,9 +52,26 @@ def build_validation_series(
     return series
 
 
-# =========================================================
-# 4. 원본/전처리 시계열 정리
-# =========================================================
+def build_validation_series(
+    forecast_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    validation_dates = forecast_result.get("validation_dates", [])
+    model_results = forecast_result.get("model_results", {})
+
+    series = {}
+
+    for model_name, result in model_results.items():
+        validation_pred = result.get("validation_pred", [])
+
+        series[model_name] = {
+            "date": validation_dates[:len(validation_pred)],
+            "value": validation_pred,
+            "success": result.get("success", False),
+            "message": result.get("message", ""),
+        }
+
+    return series
+
 
 def build_time_series_payload(preprocess_result: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -95,10 +94,6 @@ def build_time_series_payload(preprocess_result: Dict[str, Any]) -> Dict[str, An
     }
 
 
-# =========================================================
-# 5. 분석 요약 생성
-# =========================================================
-
 def build_analysis_summary(
     preprocess_summary: Dict[str, Any],
     decomposition_result: Dict[str, Any],
@@ -120,12 +115,9 @@ def build_analysis_summary(
         "protected_count": preprocess_summary.get("protected_count"),
         "decomposition_method": decomposition_result.get("method"),
         "seasonal_period": forecast_result.get("seasonal_period"),
+        "validation_length": forecast_result.get("validation_length"),
     }
 
-
-# =========================================================
-# 6. 전체 자동 분석 실행
-# =========================================================
 
 def run_time_series_analysis(
     data: List[Dict[str, Any]],
@@ -162,11 +154,14 @@ def run_time_series_analysis(
     )
 
     model_results = forecast_result["model_results"]
+    validation_length = forecast_result.get("validation_length", len(forecast_result["test_values"]))
+
+    y_test_for_metrics = forecast_result["test_values"][:validation_length]
 
     metrics_dashboard = build_metrics_dashboard(
         model_results=model_results,
         y_train=forecast_result["train_values"],
-        y_test=forecast_result["test_values"],
+        y_test=y_test_for_metrics,
     )
 
     summary = build_analysis_summary(
@@ -191,9 +186,19 @@ def run_time_series_analysis(
         "forecast": {
             "train_dates": forecast_result["train_dates"],
             "train_values": forecast_result["train_values"],
+
+            # y_test는 전체 test 데이터 그대로 표시
             "validation_dates": forecast_result["test_dates"],
             "validation_actual": forecast_result["test_values"],
+
+            # 모델별 validation 예측은 horizon 기준 길이만 표시
             "validation": build_validation_series(forecast_result),
+
+            # 미래 예측은 horizon 길이만큼 표시
+            "future": build_future_series(forecast_result),
+
+            "horizon": forecast_result["horizon"],
+            "validation_length": validation_length,
         },
         "metrics_dashboard": metrics_dashboard,
     }
