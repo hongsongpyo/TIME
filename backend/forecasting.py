@@ -236,10 +236,10 @@ def forecast_auto_arima(
                 seasonal=True,
                 sp=sp,
 
-                max_P=2,
-                max_Q=2,
+                max_P=1,
+                max_Q=1,
                 max_D=1,
-                max_order=6,
+                max_order=4,
 
                 # 계산 시간 감소 옵션
                 stepwise=True,
