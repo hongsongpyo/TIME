@@ -282,7 +282,12 @@ def forecast_auto_arima(
                 maxiter=20,
             )
 
-            model.fit(train)
+            train_for_arima = pd.Series(
+                train.values,
+                index=pd.RangeIndex(len(train)),
+            )
+
+            model.fit(train_for_arima)
 
             validation_fh = list(range(1, validation_length + 1))
             validation_pred = model.predict(fh=validation_fh)
