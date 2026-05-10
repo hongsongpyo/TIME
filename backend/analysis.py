@@ -31,27 +31,6 @@ def serialize_points(
     }
 
 
-def build_future_series(
-    forecast_result: Dict[str, Any],
-) -> Dict[str, Any]:
-    future_dates = forecast_result.get("future_dates", [])
-    model_results = forecast_result.get("model_results", {})
-
-    series = {}
-
-    for model_name, result in model_results.items():
-        future_pred = result.get("future_pred", [])
-
-        series[model_name] = {
-            "date": future_dates[:len(future_pred)],
-            "value": future_pred,
-            "success": result.get("success", False),
-            "message": result.get("message", ""),
-        }
-
-    return series
-
-
 def build_validation_series(
     forecast_result: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -146,15 +125,23 @@ def run_time_series_analysis(
         value_column="value_preprocessed",
     )
 
+    # STL / decomposition 단계에서 추정된 주기
+    seasonal_period = decomposition_result.get("period")
+
     forecast_result = run_all_forecasts(
         df=processed_df,
         horizon=horizon,
         frequency=preprocess_summary.get("frequency"),
         value_column="value_preprocessed",
+        seasonal_period=seasonal_period,
     )
 
     model_results = forecast_result["model_results"]
-    validation_length = forecast_result.get("validation_length", len(forecast_result["test_values"]))
+
+    validation_length = forecast_result.get(
+        "validation_length",
+        len(forecast_result["test_values"]),
+    )
 
     y_test_for_metrics = forecast_result["test_values"][:validation_length]
 
@@ -174,7 +161,9 @@ def run_time_series_analysis(
 
     return {
         "summary": summary,
+
         "time_series": build_time_series_payload(preprocess_result),
+
         "decomposition": {
             "date": preprocess_result["date"],
             "trend": decomposition_result["trend"],
@@ -183,6 +172,7 @@ def run_time_series_analysis(
             "period": decomposition_result["period"],
             "method": decomposition_result["method"],
         },
+
         "forecast": {
             "train_dates": forecast_result["train_dates"],
             "train_values": forecast_result["train_values"],
@@ -191,14 +181,13 @@ def run_time_series_analysis(
             "validation_dates": forecast_result["test_dates"],
             "validation_actual": forecast_result["test_values"],
 
-            # 모델별 validation 예측은 horizon 기준 길이만 표시
+            # 모델별 validation 예측만 표시
             "validation": build_validation_series(forecast_result),
-
-            # 미래 예측은 horizon 길이만큼 표시
-            "future": build_future_series(forecast_result),
 
             "horizon": forecast_result["horizon"],
             "validation_length": validation_length,
+            "seasonal_period": forecast_result.get("seasonal_period"),
         },
+
         "metrics_dashboard": metrics_dashboard,
     }

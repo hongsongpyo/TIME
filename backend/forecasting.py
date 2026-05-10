@@ -16,7 +16,6 @@ except Exception:
     AutoARIMA = None
 
 
-SEASONAL_PERIOD = 12
 TEST_RATIO = 0.2
 
 
@@ -38,6 +37,19 @@ def safe_float(value: Any) -> Optional[float]:
 
 def serialize_array(values: Any) -> List[Optional[float]]:
     return [safe_float(value) for value in list(values)]
+
+
+def normalize_seasonal_period(period: Any) -> Optional[int]:
+    try:
+        period_value = int(period)
+
+        if period_value < 2:
+            return None
+
+        return period_value
+
+    except Exception:
+        return None
 
 
 def split_train_test(series: pd.Series) -> Tuple[pd.Series, pd.Series]:
@@ -150,17 +162,21 @@ def forecast_holt_winters(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
+    seasonal_period: Optional[int],
 ) -> Dict[str, Any]:
     validation_length = resolve_validation_length(horizon, test)
 
     try:
-        use_seasonal = len(train) >= SEASONAL_PERIOD * 2
+        use_seasonal = (
+            seasonal_period is not None
+            and len(train) >= seasonal_period * 2
+        )
 
         model = ExponentialSmoothing(
             train,
             trend="add",
             seasonal="add" if use_seasonal else None,
-            seasonal_periods=SEASONAL_PERIOD if use_seasonal else None,
+            seasonal_periods=seasonal_period if use_seasonal else None,
             initialization_method="estimated",
         ).fit(optimized=True)
 
@@ -172,7 +188,10 @@ def forecast_holt_winters(
             "aic": safe_float(getattr(model, "aic", None)),
             "bic": safe_float(getattr(model, "bic", None)),
             "success": True,
-            "message": "Holt-Winters validation forecast completed.",
+            "message": (
+                f"Holt-Winters validation forecast completed. "
+                f"seasonal_period={seasonal_period}"
+            ),
         }
 
     except Exception as error:
@@ -226,23 +245,33 @@ def forecast_auto_arima(
     train: pd.Series,
     test: pd.Series,
     horizon: int,
+    seasonal_period: Optional[int],
 ) -> Dict[str, Any]:
     validation_length = resolve_validation_length(horizon, test)
 
     try:
         if AutoARIMA is not None:
-            model = AutoARIMA(
-                max_p=2,
-                max_q=2,
-                max_d=1,
+            use_seasonal = (
+                seasonal_period is not None
+                and len(train) >= seasonal_period * 2
+            )
 
+            model = AutoARIMA(
+                start_p=1,
+                start_q=1,
+                max_p=1,
+                max_q=1,
+                d=1,
+
+                start_P=0,
+                start_Q=0,
                 max_P=1,
                 max_Q=1,
                 max_D=1,
-                max_order=4,
 
-                sp=SEASONAL_PERIOD,
-                seasonal=True,
+                sp=seasonal_period if use_seasonal else 1,
+                seasonal=use_seasonal,
+                max_order=4,
 
                 suppress_warnings=True,
                 stepwise=True,
@@ -273,7 +302,8 @@ def forecast_auto_arima(
                 "success": True,
                 "message": (
                     f"AutoARIMA validation forecast completed. "
-                    f"order={order}, seasonal_order={seasonal_order}"
+                    f"order={order}, seasonal_order={seasonal_order}, "
+                    f"seasonal_period={seasonal_period}"
                 ),
             }
 
@@ -298,9 +328,12 @@ def run_all_forecasts(
     horizon: Union[int, str],
     frequency: Optional[str] = None,
     value_column: str = "value_preprocessed",
+    seasonal_period: Optional[int] = None,
 ) -> Dict[str, Any]:
     if value_column not in df.columns:
         raise ValueError(f"{value_column} 컬럼을 찾을 수 없습니다.")
+
+    seasonal_period = normalize_seasonal_period(seasonal_period)
 
     series = pd.Series(
         df[value_column].values,
@@ -341,12 +374,14 @@ def run_all_forecasts(
         train=train,
         test=test,
         horizon=horizon_value,
+        seasonal_period=seasonal_period,
     )
 
     model_results["Holt-Winters"] = forecast_holt_winters(
         train=train,
         test=test,
         horizon=horizon_value,
+        seasonal_period=seasonal_period,
     )
 
     model_results["Exponential Smoothing"] = forecast_exponential_smoothing(
@@ -374,7 +409,7 @@ def run_all_forecasts(
         "validation_dates": validation_dates,
         "validation_length": validation_length,
 
-        "seasonal_period": SEASONAL_PERIOD,
+        "seasonal_period": seasonal_period,
         "horizon": horizon_value,
 
         "model_results": model_results,
