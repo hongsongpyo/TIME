@@ -232,14 +232,14 @@ def forecast_auto_arima(
     try:
         if AutoARIMA is not None:
             model = AutoARIMA(
-                max_p=1,
-                max_q=1,
+                max_p=2,
+                max_q=2,
                 max_d=1,
 
                 max_P=1,
                 max_Q=1,
                 max_D=1,
-                max_order=3,
+                max_order=4,
 
                 sp=SEASONAL_PERIOD,
                 seasonal=True,
@@ -250,7 +250,7 @@ def forecast_auto_arima(
                 trace=False,
 
                 n_jobs=1,
-                maxiter=15,
+                maxiter=20,
             )
 
             model.fit(train)
