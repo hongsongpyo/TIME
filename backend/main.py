@@ -34,13 +34,15 @@ app = FastAPI(
 # =========================================================
 # 2. CORS 설정
 # ---------------------------------------------------------
-# 프론트엔드 HTML 파일에서 FastAPI 요청을 보낼 수 있도록 허용
+# GitHub Pages 프론트엔드에서 Render 백엔드 요청 허용
 # =========================================================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "https://hongsongpyo.github.io",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
