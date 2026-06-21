@@ -6,7 +6,8 @@
 # 2. Z-score / IQR / STL residual / Isolation Forest 지원
 # 3. row-level anomaly와 feature-level anomaly를 함께 계산
 # 4. 사용자가 지정한 특이치 셀은 protected point로 분리
-# 5. 결과 페이지에서 사용할 chart/table payload 생성
+# 5. 이상 점수, threshold, 변수별 기여도, heatmap, Top N table payload 생성
+# 6. 메뉴형 이상탐지 대시보드에서 사용할 응답 구조 생성
 # =========================================================
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -124,17 +125,73 @@ def normalize_score(values: np.ndarray) -> np.ndarray:
         return result
 
     result = np.zeros_like(values, dtype=float)
-    result[finite_mask] = (finite_values - min_value) / (max_value - min_value) * 100.0
+    result[finite_mask] = (
+        (finite_values - min_value) / (max_value - min_value) * 100.0
+    )
 
     return result
 
 
+def normalize_sensitivity(sensitivity: str) -> str:
+    sensitivity = str(sensitivity or "medium").strip().lower()
+
+    high_values = ["high", "높음", "민감", "높은"]
+    low_values = ["low", "낮음", "낮은"]
+    medium_values = ["medium", "normal", "보통", "중간", "기본"]
+
+    if sensitivity in high_values:
+        return "high"
+
+    if sensitivity in low_values:
+        return "low"
+
+    if sensitivity in medium_values:
+        return "medium"
+
+    return "medium"
+
+
+def get_sensitivity_label(sensitivity: str) -> str:
+    sensitivity = normalize_sensitivity(sensitivity)
+
+    if sensitivity == "high":
+        return "높음"
+
+    if sensitivity == "low":
+        return "낮음"
+
+    return "보통"
+
+
+def normalize_method(method: str) -> str:
+    method = str(method or "auto").strip().lower()
+
+    method_alias = {
+        "자동": "auto",
+        "오토": "auto",
+        "isolationforest": "isolation_forest",
+        "isolation forest": "isolation_forest",
+        "격리숲": "isolation_forest",
+        "z-score": "zscore",
+        "z score": "zscore",
+        "z스코어": "zscore",
+        "stl": "stl_residual",
+        "stl residual": "stl_residual",
+        "잔차": "stl_residual",
+    }
+
+    return method_alias.get(method, method)
+
+
 # =========================================================
 # 2. 민감도별 threshold 설정
+# ---------------------------------------------------------
+# 민감도 높음: threshold 낮음 → 더 많이 탐지
+# 민감도 낮음: threshold 높음 → 확실한 이상만 탐지
 # =========================================================
 
 def get_z_threshold(sensitivity: str) -> float:
-    sensitivity = str(sensitivity or "medium").lower()
+    sensitivity = normalize_sensitivity(sensitivity)
 
     if sensitivity == "high":
         return 2.5
@@ -146,7 +203,7 @@ def get_z_threshold(sensitivity: str) -> float:
 
 
 def get_iqr_multiplier(sensitivity: str) -> float:
-    sensitivity = str(sensitivity or "medium").lower()
+    sensitivity = normalize_sensitivity(sensitivity)
 
     if sensitivity == "high":
         return 1.2
@@ -158,7 +215,7 @@ def get_iqr_multiplier(sensitivity: str) -> float:
 
 
 def get_contamination(sensitivity: str, data_length: int) -> float:
-    sensitivity = str(sensitivity or "medium").lower()
+    sensitivity = normalize_sensitivity(sensitivity)
 
     if sensitivity == "high":
         base = 0.12
@@ -189,7 +246,11 @@ def prepare_anomaly_dataframe(
         raise ValueError(f"{date_column} 컬럼을 찾을 수 없습니다.")
 
     prepared_df = df.copy()
-    prepared_df[date_column] = pd.to_datetime(prepared_df[date_column], errors="coerce")
+    prepared_df[date_column] = pd.to_datetime(
+        prepared_df[date_column],
+        errors="coerce",
+    )
+
     prepared_df = prepared_df.dropna(subset=[date_column])
     prepared_df = prepared_df.sort_values(date_column)
     prepared_df = prepared_df.drop_duplicates(subset=[date_column], keep="last")
@@ -210,7 +271,11 @@ def prepare_anomaly_dataframe(
             if numeric.notna().sum() > 0:
                 value_columns.append(str(column))
 
-    value_columns = [str(column) for column in value_columns if column in prepared_df.columns]
+    value_columns = [
+        str(column)
+        for column in value_columns
+        if str(column) in prepared_df.columns and str(column) != date_column
+    ]
 
     if not value_columns:
         raise ValueError("이상탐지를 수행할 숫자형 컬럼을 찾을 수 없습니다.")
@@ -299,7 +364,9 @@ def detect_by_iqr(
     q3 = np.nanpercentile(values, 75, axis=0)
     iqr = q3 - q1
 
-    iqr = np.where(iqr == 0, np.nanstd(values, axis=0), iqr)
+    std = np.nanstd(values, axis=0)
+
+    iqr = np.where(iqr == 0, std, iqr)
     iqr = np.where(iqr == 0, 1.0, iqr)
 
     lower_bound = q1 - multiplier * iqr
@@ -327,6 +394,8 @@ def detect_by_iqr(
         "message": "IQR 기반 이상탐지를 수행했습니다.",
         "extra": {
             "multiplier": multiplier,
+            "lower_bound": serialize_values(lower_bound),
+            "upper_bound": serialize_values(upper_bound),
         },
     }
 
@@ -357,6 +426,8 @@ def infer_stl_period(
         period = 4
     elif freq.startswith("H"):
         period = 24
+    elif freq.startswith("T") or freq.startswith("MIN"):
+        period = 60
     else:
         period = min(7, max(2, data_length // 3))
 
@@ -387,6 +458,7 @@ def calculate_stl_residuals(
                 period=period,
                 robust=True,
             )
+
             result = stl.fit()
             residual = np.asarray(result.resid, dtype=float)
 
@@ -396,6 +468,7 @@ def calculate_stl_residuals(
                 min_periods=1,
                 center=True,
             ).mean()
+
             residual = np.asarray(series - trend, dtype=float)
 
         residual_matrix[:, column_index] = residual
@@ -445,8 +518,8 @@ def detect_by_stl_residual(
 # =========================================================
 # 8. Isolation Forest 이상탐지
 # ---------------------------------------------------------
-# Isolation Forest는 기본적으로 row-level 탐지기이므로,
-# feature-level marker는 robust z-score 기반 기여도를 함께 사용함.
+# Isolation Forest는 row-level 탐지기이므로
+# feature-level marker는 robust z-score 기반 기여도를 함께 사용함
 # =========================================================
 
 def detect_by_isolation_forest(
@@ -488,8 +561,6 @@ def detect_by_isolation_forest(
 
         feature_anomaly_matrix = feature_scores >= z_threshold
 
-        # Isolation Forest가 이상행으로 잡았는데 특정 feature가 threshold를 넘지 않으면
-        # 해당 행에서 가장 기여도가 큰 feature 하나만 anomaly marker로 표시
         for row_index, is_row_anomaly in enumerate(row_if_anomaly):
             if not is_row_anomaly:
                 feature_anomaly_matrix[row_index, :] = False
@@ -514,6 +585,7 @@ def detect_by_isolation_forest(
             "extra": {
                 "contamination": contamination,
                 "isolation_forest_score": serialize_values(normalized_row_score),
+                "score_note": "Isolation Forest는 행 단위 탐지이고, 변수별 기여도는 robust z-score 기준입니다.",
             },
         }
 
@@ -533,7 +605,7 @@ def resolve_method(
     method: str,
     values: np.ndarray,
 ) -> str:
-    method = str(method or "auto").lower()
+    method = normalize_method(method)
 
     allowed_methods = [
         "auto",
@@ -633,6 +705,7 @@ def build_protected_mask(
     normalized_map = normalize_protected_date_map(protected_date_map)
 
     # 신규 방식: 컬럼별 보호 날짜
+    # energy 셀만 특이치로 지정한 경우 energy만 보호
     if normalized_map:
         for column_index, column_name in enumerate(value_columns):
             protected_set = set(normalized_map.get(str(column_name), []))
@@ -675,7 +748,11 @@ def apply_protected_mask(
     masked_feature_scores[protected_mask] = 0.0
     masked_feature_anomaly_matrix[protected_mask] = False
 
-    row_score = np.nanmax(masked_feature_scores, axis=1)
+    if masked_feature_scores.size == 0:
+        row_score = np.array([])
+    else:
+        row_score = np.nanmax(masked_feature_scores, axis=1)
+
     is_anomaly = np.any(masked_feature_anomaly_matrix, axis=1)
 
     return (
@@ -687,7 +764,7 @@ def apply_protected_mask(
 
 
 # =========================================================
-# 11. 결과 payload 생성
+# 11. 기본 payload 생성 함수
 # =========================================================
 
 def build_series_payload(
@@ -721,7 +798,9 @@ def build_feature_anomaly_payload(
     result = {}
 
     for column_index, column in enumerate(value_columns):
-        result[column] = serialize_bool_values(feature_anomaly_matrix[:, column_index])
+        result[column] = serialize_bool_values(
+            feature_anomaly_matrix[:, column_index]
+        )
 
     return result
 
@@ -734,7 +813,10 @@ def build_feature_point_payload(
     point_mask: np.ndarray,
 ) -> Dict[str, Any]:
     features = {}
+
     all_dates = []
+    all_features = []
+    all_values = []
     all_scores = []
 
     for column_index, column in enumerate(value_columns):
@@ -746,12 +828,18 @@ def build_feature_point_payload(
             if not bool(is_point):
                 continue
 
-            column_dates.append(date_keys[row_index])
-            column_values.append(safe_float(df.iloc[row_index][column]))
-            column_scores.append(safe_float(feature_scores[row_index, column_index]))
+            date = date_keys[row_index]
+            value = safe_float(df.iloc[row_index][column])
+            score = safe_float(feature_scores[row_index, column_index])
 
-            all_dates.append(date_keys[row_index])
-            all_scores.append(safe_float(feature_scores[row_index, column_index]))
+            column_dates.append(date)
+            column_values.append(value)
+            column_scores.append(score)
+
+            all_dates.append(date)
+            all_features.append(column)
+            all_values.append(value)
+            all_scores.append(score)
 
         features[column] = {
             "date": column_dates,
@@ -761,8 +849,50 @@ def build_feature_point_payload(
 
     return {
         "date": all_dates,
+        "feature": all_features,
+        "value": all_values,
         "score": all_scores,
         "features": features,
+    }
+
+
+# =========================================================
+# 12. 메뉴형 대시보드 payload 생성
+# =========================================================
+
+def build_score_timeline_payload(
+    dates: List[str],
+    row_score: np.ndarray,
+    is_anomaly: np.ndarray,
+    threshold: float,
+) -> Dict[str, Any]:
+    return {
+        "date": dates,
+        "score": serialize_values(row_score),
+        "threshold": [
+            safe_float(threshold)
+            for _ in dates
+        ],
+        "is_anomaly": serialize_bool_values(is_anomaly),
+    }
+
+
+def build_heatmap_payload(
+    dates: List[str],
+    value_columns: List[str],
+    feature_scores: np.ndarray,
+) -> Dict[str, Any]:
+    z_values = []
+
+    for column_index, _ in enumerate(value_columns):
+        z_values.append(
+            serialize_values(feature_scores[:, column_index])
+        )
+
+    return {
+        "date": dates,
+        "variables": value_columns,
+        "z": z_values,
     }
 
 
@@ -806,8 +936,10 @@ def build_feature_contribution(
         rows.append(
             {
                 "feature": column,
+                "variable": column,
                 "mean_score": safe_float(mean_score),
                 "max_score": safe_float(max_score),
+                "score_sum": safe_float(score_sum),
                 "contribution_ratio": safe_float(contribution_ratio),
                 "main_count": anomaly_count,
                 "anomaly_count": anomaly_count,
@@ -819,6 +951,7 @@ def build_feature_contribution(
         key=lambda item: (
             item.get("main_count") or 0,
             item.get("mean_score") or 0,
+            item.get("max_score") or 0,
         ),
         reverse=True,
     )
@@ -828,6 +961,71 @@ def build_feature_contribution(
 
     return rows
 
+
+def build_row_contribution_payload(
+    row_index: int,
+    df: pd.DataFrame,
+    date_keys: List[str],
+    value_columns: List[str],
+    feature_scores: np.ndarray,
+    feature_anomaly_matrix: np.ndarray,
+    protected_mask: np.ndarray,
+) -> Dict[str, Any]:
+    if row_index is None or row_index < 0 or row_index >= len(df):
+        return {
+            "date": None,
+            "items": [],
+        }
+
+    score_sum = float(np.nansum(feature_scores[row_index, :]))
+
+    items = []
+
+    for column_index, column in enumerate(value_columns):
+        score = float(feature_scores[row_index, column_index])
+
+        if protected_mask[row_index, column_index]:
+            status = "protected"
+        elif feature_anomaly_matrix[row_index, column_index]:
+            status = "anomaly"
+        else:
+            status = "normal"
+
+        contribution_ratio = (
+            score / score_sum * 100.0
+            if score_sum > 0
+            else 0.0
+        )
+
+        items.append(
+            {
+                "feature": column,
+                "variable": column,
+                "value": safe_float(df.iloc[row_index][column]),
+                "score": safe_float(score),
+                "contribution_ratio": safe_float(contribution_ratio),
+                "status": status,
+            }
+        )
+
+    items = sorted(
+        items,
+        key=lambda item: item.get("score") or 0,
+        reverse=True,
+    )
+
+    for rank, item in enumerate(items, start=1):
+        item["rank"] = rank
+
+    return {
+        "date": date_keys[row_index],
+        "items": items,
+    }
+
+
+# =========================================================
+# 13. 이상 유형 및 테이블 생성
+# =========================================================
 
 def get_main_feature_for_row(
     row_index: int,
@@ -841,11 +1039,92 @@ def get_main_feature_for_row(
         best_index = anomaly_feature_indices[
             int(np.nanargmax(feature_scores[row_index, anomaly_feature_indices]))
         ]
+
         return value_columns[int(best_index)]
 
     best_index = int(np.nanargmax(feature_scores[row_index, :]))
 
     return value_columns[best_index]
+
+
+def count_consecutive_anomaly_length(
+    row_index: int,
+    is_anomaly: np.ndarray,
+) -> int:
+    if row_index < 0 or row_index >= len(is_anomaly):
+        return 0
+
+    if not bool(is_anomaly[row_index]):
+        return 0
+
+    left = row_index
+    right = row_index
+
+    while left - 1 >= 0 and bool(is_anomaly[left - 1]):
+        left -= 1
+
+    while right + 1 < len(is_anomaly) and bool(is_anomaly[right + 1]):
+        right += 1
+
+    return right - left + 1
+
+
+def classify_anomaly_type(
+    row_index: int,
+    row_score: np.ndarray,
+    is_anomaly: np.ndarray,
+    feature_anomaly_matrix: np.ndarray,
+    threshold: float,
+) -> str:
+    feature_count = int(np.sum(feature_anomaly_matrix[row_index, :]))
+    run_length = count_consecutive_anomaly_length(row_index, is_anomaly)
+    score = float(row_score[row_index]) if len(row_score) > row_index else 0.0
+
+    if run_length >= 3:
+        return "패턴 이상"
+
+    if feature_count >= 2:
+        return "다변량 동시 이상"
+
+    if threshold > 0 and score >= threshold * 1.5:
+        return "전역 이상"
+
+    return "맥락 이상"
+
+
+def build_anomaly_description(
+    anomaly_type: str,
+    main_feature: str,
+    score: Optional[float],
+    threshold: Optional[float],
+) -> str:
+    score_text = "-" if score is None else str(score)
+    threshold_text = "-" if threshold is None else str(threshold)
+
+    if anomaly_type == "패턴 이상":
+        return (
+            f"연속된 시점에서 이상 점수가 높게 나타났으며, "
+            f"주요 변수는 {main_feature}입니다. "
+            f"score={score_text}, threshold={threshold_text}"
+        )
+
+    if anomaly_type == "다변량 동시 이상":
+        return (
+            f"여러 변수가 동시에 정상 범위에서 벗어났으며, "
+            f"가장 큰 기여 변수는 {main_feature}입니다. "
+            f"score={score_text}, threshold={threshold_text}"
+        )
+
+    if anomaly_type == "전역 이상":
+        return (
+            f"{main_feature} 값이 전체 분포 기준 크게 벗어났습니다. "
+            f"score={score_text}, threshold={threshold_text}"
+        )
+
+    return (
+        f"{main_feature} 값이 주변 패턴 또는 일반적인 변동 범위에서 벗어났습니다. "
+        f"score={score_text}, threshold={threshold_text}"
+    )
 
 
 def build_anomaly_table(
@@ -857,6 +1136,7 @@ def build_anomaly_table(
     feature_scores: np.ndarray,
     feature_anomaly_matrix: np.ndarray,
     protected_mask: np.ndarray,
+    threshold: float,
 ) -> List[Dict[str, Any]]:
     rows = []
 
@@ -871,13 +1151,23 @@ def build_anomaly_table(
             feature_anomaly_matrix=feature_anomaly_matrix,
         )
 
+        anomaly_type = classify_anomaly_type(
+            row_index=row_index,
+            row_score=row_score,
+            is_anomaly=is_anomaly,
+            feature_anomaly_matrix=feature_anomaly_matrix,
+            threshold=threshold,
+        )
+
         feature_values = {}
         row_feature_scores = {}
         row_feature_status = {}
 
         for column_index, column in enumerate(value_columns):
             feature_values[column] = safe_float(df.iloc[row_index][column])
-            row_feature_scores[column] = safe_float(feature_scores[row_index, column_index])
+            row_feature_scores[column] = safe_float(
+                feature_scores[row_index, column_index]
+            )
 
             if protected_mask[row_index, column_index]:
                 row_feature_status[column] = "protected"
@@ -886,12 +1176,23 @@ def build_anomaly_table(
             else:
                 row_feature_status[column] = "normal"
 
+        score = safe_float(row_score[row_index])
+
         rows.append(
             {
                 "date": date_keys[row_index],
-                "score": safe_float(row_score[row_index]),
+                "score": score,
                 "status": "anomaly",
                 "main_feature": main_feature,
+                "top_variable": main_feature,
+                "type": anomaly_type,
+                "anomaly_type": anomaly_type,
+                "description": build_anomaly_description(
+                    anomaly_type=anomaly_type,
+                    main_feature=main_feature,
+                    score=score,
+                    threshold=safe_float(threshold),
+                ),
                 "feature_values": feature_values,
                 "feature_scores": row_feature_scores,
                 "feature_status": row_feature_status,
@@ -904,11 +1205,140 @@ def build_anomaly_table(
         reverse=True,
     )
 
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
+
+    return rows
+
+
+def build_anomaly_type_summary(
+    anomaly_table: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    counter: Dict[str, int] = {}
+
+    for row in anomaly_table:
+        anomaly_type = row.get("anomaly_type") or row.get("type") or "기타"
+        counter[anomaly_type] = counter.get(anomaly_type, 0) + 1
+
+    result = []
+
+    for anomaly_type, count in counter.items():
+        result.append(
+            {
+                "type": anomaly_type,
+                "count": int(count),
+            }
+        )
+
+    result = sorted(
+        result,
+        key=lambda item: item["count"],
+        reverse=True,
+    )
+
+    return result
+
+
+def get_top_variable(
+    anomaly_table: List[Dict[str, Any]],
+    feature_contribution: List[Dict[str, Any]],
+) -> Optional[str]:
+    if anomaly_table:
+        counter: Dict[str, int] = {}
+
+        for row in anomaly_table:
+            feature = row.get("main_feature") or row.get("top_variable")
+
+            if not feature:
+                continue
+
+            counter[feature] = counter.get(feature, 0) + 1
+
+        if counter:
+            return sorted(
+                counter.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[0][0]
+
+    if feature_contribution:
+        return feature_contribution[0].get("feature")
+
+    return None
+
+
+def get_top_anomaly_index(
+    is_anomaly: np.ndarray,
+    row_score: np.ndarray,
+) -> Optional[int]:
+    anomaly_indices = np.where(is_anomaly)[0]
+
+    if len(anomaly_indices) == 0:
+        return None
+
+    top_index = anomaly_indices[
+        int(np.nanargmax(row_score[anomaly_indices]))
+    ]
+
+    return int(top_index)
+
+
+# =========================================================
+# 14. 다운로드용 결과 행 생성
+# =========================================================
+
+def build_download_rows(
+    dates: List[str],
+    value_columns: List[str],
+    df: pd.DataFrame,
+    row_score: np.ndarray,
+    is_anomaly: np.ndarray,
+    feature_scores: np.ndarray,
+    feature_anomaly_matrix: np.ndarray,
+    protected_mask: np.ndarray,
+    anomaly_table: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    anomaly_type_by_date = {}
+    main_feature_by_date = {}
+
+    for row in anomaly_table:
+        date = row.get("date")
+        anomaly_type_by_date[date] = row.get("anomaly_type")
+        main_feature_by_date[date] = row.get("main_feature")
+
+    rows = []
+
+    for row_index, date in enumerate(dates):
+        row = {
+            "date": date,
+            "anomaly_score": safe_float(row_score[row_index]),
+            "is_anomaly": bool(is_anomaly[row_index]),
+            "main_feature": main_feature_by_date.get(date),
+            "anomaly_type": anomaly_type_by_date.get(date),
+        }
+
+        for column_index, column in enumerate(value_columns):
+            row[f"{column}_value"] = safe_float(df.iloc[row_index][column])
+            row[f"{column}_score"] = safe_float(
+                feature_scores[row_index, column_index]
+            )
+
+            if protected_mask[row_index, column_index]:
+                status = "protected"
+            elif feature_anomaly_matrix[row_index, column_index]:
+                status = "anomaly"
+            else:
+                status = "normal"
+
+            row[f"{column}_status"] = status
+
+        rows.append(row)
+
     return rows
 
 
 # =========================================================
-# 12. 전체 이상탐지 실행
+# 15. 전체 이상탐지 실행
 # =========================================================
 
 def run_anomaly_detection(
@@ -921,6 +1351,8 @@ def run_anomaly_detection(
     protected_dates: Optional[List[Any]] = None,
     protected_date_map: Optional[Dict[str, List[Any]]] = None,
 ) -> Dict[str, Any]:
+    sensitivity = normalize_sensitivity(sensitivity)
+
     prepared_df, detected_value_columns = prepare_anomaly_dataframe(
         df=df,
         date_column=date_column,
@@ -951,8 +1383,13 @@ def run_anomaly_detection(
     if feature_scores.shape != values.shape:
         feature_scores = calculate_robust_z_matrix(values)
 
+    threshold = float(
+        detector_result.get("threshold")
+        if detector_result.get("threshold") is not None
+        else get_z_threshold(sensitivity)
+    )
+
     if feature_anomaly_matrix.shape != values.shape:
-        threshold = float(detector_result.get("threshold") or get_z_threshold(sensitivity))
         feature_anomaly_matrix = feature_scores >= threshold
 
     protected_mask = build_protected_mask(
@@ -975,15 +1412,20 @@ def run_anomaly_detection(
 
     anomaly_count = int(np.sum(final_is_anomaly))
     total_count = len(final_is_anomaly)
-    anomaly_ratio = anomaly_count / total_count * 100.0 if total_count > 0 else 0.0
+    anomaly_ratio = (
+        anomaly_count / total_count * 100.0
+        if total_count > 0
+        else 0.0
+    )
 
-    if anomaly_count > 0:
-        anomaly_indices = np.where(final_is_anomaly)[0]
-        top_index = anomaly_indices[
-            int(np.nanargmax(final_row_score[anomaly_indices]))
-        ]
-        top_anomaly_date = dates[int(top_index)]
-        top_anomaly_score = safe_float(final_row_score[int(top_index)])
+    top_index = get_top_anomaly_index(
+        is_anomaly=final_is_anomaly,
+        row_score=final_row_score,
+    )
+
+    if top_index is not None:
+        top_anomaly_date = dates[top_index]
+        top_anomaly_score = safe_float(final_row_score[top_index])
     else:
         top_anomaly_date = None
         top_anomaly_score = None
@@ -1019,15 +1461,84 @@ def run_anomaly_detection(
         feature_scores=masked_feature_scores,
         feature_anomaly_matrix=masked_feature_anomaly_matrix,
         protected_mask=protected_mask,
+        threshold=threshold,
+    )
+
+    anomaly_type_summary = build_anomaly_type_summary(anomaly_table)
+
+    top_variable = get_top_variable(
+        anomaly_table=anomaly_table,
+        feature_contribution=feature_contribution,
+    )
+
+    if top_index is not None:
+        top_anomaly_contribution = build_row_contribution_payload(
+            row_index=top_index,
+            df=prepared_df,
+            date_keys=dates,
+            value_columns=detected_value_columns,
+            feature_scores=masked_feature_scores,
+            feature_anomaly_matrix=masked_feature_anomaly_matrix,
+            protected_mask=protected_mask,
+        )
+    else:
+        top_anomaly_contribution = {
+            "date": None,
+            "items": [],
+        }
+
+    score_timeline = build_score_timeline_payload(
+        dates=dates,
+        row_score=final_row_score,
+        is_anomaly=final_is_anomaly,
+        threshold=threshold,
+    )
+
+    heatmap = build_heatmap_payload(
+        dates=dates,
+        value_columns=detected_value_columns,
+        feature_scores=masked_feature_scores,
+    )
+
+    download_rows = build_download_rows(
+        dates=dates,
+        value_columns=detected_value_columns,
+        df=prepared_df,
+        row_score=final_row_score,
+        is_anomaly=final_is_anomaly,
+        feature_scores=masked_feature_scores,
+        feature_anomaly_matrix=masked_feature_anomaly_matrix,
+        protected_mask=protected_mask,
+        anomaly_table=anomaly_table,
     )
 
     extra = detector_result.get("extra") or {}
 
-    return {
+    summary = {
         "method": detector_result.get("method"),
         "resolved_method": detector_result.get("resolved_method"),
         "sensitivity": sensitivity,
-        "threshold": safe_float(detector_result.get("threshold")),
+        "sensitivity_label": get_sensitivity_label(sensitivity),
+        "threshold": safe_float(threshold),
+
+        "data_count": total_count,
+        "variable_count": len(detected_value_columns),
+        "anomaly_count": anomaly_count,
+        "anomaly_ratio": safe_float(anomaly_ratio),
+
+        "top_variable": top_variable,
+        "top_anomaly_date": top_anomaly_date,
+        "top_anomaly_score": top_anomaly_score,
+    }
+
+    return {
+        "summary": summary,
+
+        "method": detector_result.get("method"),
+        "resolved_method": detector_result.get("resolved_method"),
+        "sensitivity": sensitivity,
+        "sensitivity_label": get_sensitivity_label(sensitivity),
+        "threshold": safe_float(threshold),
         "message": detector_result.get("message", ""),
 
         "date": dates,
@@ -1060,6 +1571,7 @@ def run_anomaly_detection(
 
         "anomaly_count": anomaly_count,
         "anomaly_ratio": safe_float(anomaly_ratio),
+        "top_variable": top_variable,
         "top_anomaly_date": top_anomaly_date,
         "top_anomaly_score": top_anomaly_score,
 
@@ -1067,7 +1579,17 @@ def run_anomaly_detection(
         "protected_points": protected_points,
 
         "feature_contribution": feature_contribution,
+        "variable_summary": feature_contribution,
+        "top_anomaly_contribution": top_anomaly_contribution,
+
+        "score_timeline": score_timeline,
+        "heatmap": heatmap,
+
         "anomaly_table": anomaly_table,
+        "top_anomaly_table": anomaly_table[:20],
+        "anomaly_type_summary": anomaly_type_summary,
+
+        "download_rows": download_rows,
 
         "protected_dates": normalize_protected_dates(protected_dates),
         "protected_date_map": normalize_protected_date_map(protected_date_map),

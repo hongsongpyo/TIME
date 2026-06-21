@@ -2,70 +2,56 @@
 # TIME - backend/analysis.py
 # ---------------------------------------------------------
 # 역할
-# 1. 예측 모드와 이상탐지 모드 분기
-# 2. 단변량 시계열 예측 분석 실행
-# 3. 다변량 시계열 이상탐지 분석 실행
-# 4. 프론트엔드 result.html에서 사용할 payload 생성
+# 1. 다변량 시계열 이상탐지 분석 실행
+# 2. preprocessing.py의 다변량 전처리 결과와 anomaly.py의 탐지 결과 연결
+# 3. result.html / result.js / anomaly-chart.js에서 사용할 payload 생성
+# 4. 기존 main.py 호환을 위해 run_time_series_analysis 함수명 유지
 # =========================================================
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from preprocessing import (
-    preprocess_time_series,
     preprocess_multivariate_time_series,
     serialize_values,
 )
 
-from decomposition import decompose_time_series
-from forecasting import run_all_forecasts
-from metrics import build_metrics_dashboard, get_best_model
-
 from anomaly import run_anomaly_detection
-from anomaly_metrics import (
-    build_anomaly_metrics_payload,
-    attach_anomaly_interpretation,
-)
 
 
 # =========================================================
-# 1. 공통 정규화
+# 1. 옵션 정규화
 # =========================================================
 
 def normalize_analysis_mode(mode: Optional[str]) -> str:
-    mode_text = str(mode or "forecast").strip().lower()
+    mode_text = str(mode or "anomaly").strip().lower()
 
-    if mode_text == "anomaly":
+    if mode_text in ["anomaly", "anomaly_detection", "detect", "이상탐지"]:
         return "anomaly"
 
-    return "forecast"
+    # 예측 기능은 사용하지 않으므로 다른 값이 들어와도 anomaly로 처리
+    return "anomaly"
 
 
-def normalize_forecast_horizon(horizon: Any) -> Union[int, str]:
-    if horizon == "auto":
-        return "auto"
+def normalize_anomaly_method(method: Optional[str]) -> str:
+    method_text = str(method or "auto").strip().lower()
 
-    try:
-        horizon_value = int(horizon)
+    method_alias = {
+        "자동": "auto",
+        "오토": "auto",
+        "isolationforest": "isolation_forest",
+        "isolation forest": "isolation_forest",
+        "격리숲": "isolation_forest",
+        "z-score": "zscore",
+        "z score": "zscore",
+        "z스코어": "zscore",
+        "stl": "stl_residual",
+        "stl residual": "stl_residual",
+        "잔차": "stl_residual",
+    }
 
-        if horizon_value <= 0:
-            raise ValueError
-
-        return horizon_value
-
-    except Exception:
-        return 12
-
-
-def normalize_anomaly_options(
-    anomaly_options: Optional[Dict[str, Any]],
-) -> Dict[str, str]:
-    if anomaly_options is None:
-        anomaly_options = {}
-
-    method = str(anomaly_options.get("method", "auto")).strip().lower()
-    sensitivity = str(anomaly_options.get("sensitivity", "medium")).strip().lower()
+    method_text = method_alias.get(method_text, method_text)
 
     allowed_methods = [
         "auto",
@@ -75,310 +61,384 @@ def normalize_anomaly_options(
         "stl_residual",
     ]
 
-    allowed_sensitivities = [
-        "low",
-        "medium",
-        "high",
-    ]
+    if method_text not in allowed_methods:
+        return "auto"
 
-    if method not in allowed_methods:
-        method = "auto"
+    return method_text
 
-    if sensitivity not in allowed_sensitivities:
-        sensitivity = "medium"
+
+def normalize_sensitivity(sensitivity: Optional[str]) -> str:
+    sensitivity_text = str(sensitivity or "medium").strip().lower()
+
+    high_values = ["high", "높음", "민감", "높은"]
+    medium_values = ["medium", "normal", "보통", "중간", "기본"]
+    low_values = ["low", "낮음", "낮은"]
+
+    if sensitivity_text in high_values:
+        return "high"
+
+    if sensitivity_text in low_values:
+        return "low"
+
+    if sensitivity_text in medium_values:
+        return "medium"
+
+    return "medium"
+
+
+def get_sensitivity_label(sensitivity: Optional[str]) -> str:
+    sensitivity = normalize_sensitivity(sensitivity)
+
+    if sensitivity == "high":
+        return "높음"
+
+    if sensitivity == "low":
+        return "낮음"
+
+    return "보통"
+
+
+def normalize_anomaly_options(
+    anomaly_options: Optional[Dict[str, Any]] = None,
+    method: Optional[str] = None,
+    sensitivity: Optional[str] = None,
+) -> Dict[str, str]:
+    if anomaly_options is None:
+        anomaly_options = {}
+
+    resolved_method = method
+    resolved_sensitivity = sensitivity
+
+    if resolved_method is None:
+        resolved_method = anomaly_options.get("method", "auto")
+
+    if resolved_sensitivity is None:
+        resolved_sensitivity = anomaly_options.get("sensitivity", "medium")
+
+    normalized_method = normalize_anomaly_method(resolved_method)
+    normalized_sensitivity = normalize_sensitivity(resolved_sensitivity)
 
     return {
-        "method": method,
-        "sensitivity": sensitivity,
+        "method": normalized_method,
+        "sensitivity": normalized_sensitivity,
+        "sensitivity_label": get_sensitivity_label(normalized_sensitivity),
     }
 
 
 # =========================================================
-# 2. Point 직렬화
+# 2. 날짜 / 값 직렬화
 # =========================================================
 
-def serialize_points(
-    points_df: pd.DataFrame,
-    value_column: str = "value_filled",
+def normalize_date_string(value: Any) -> Optional[str]:
+    try:
+        timestamp = pd.Timestamp(value)
+
+        if pd.isna(timestamp):
+            return None
+
+        if (
+            timestamp.hour == 0
+            and timestamp.minute == 0
+            and timestamp.second == 0
+            and timestamp.microsecond == 0
+        ):
+            return timestamp.strftime("%Y-%m-%d")
+
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def serialize_point_list(
+    points: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, List[Any]]:
-    if points_df is None or points_df.empty:
+    if not points:
+        return {
+            "date": [],
+            "column": [],
+            "value": [],
+        }
+
+    return {
+        "date": [point.get("date") for point in points],
+        "column": [point.get("column") for point in points],
+        "value": [point.get("value") for point in points],
+    }
+
+
+def serialize_primary_points(
+    points: Optional[List[Dict[str, Any]]],
+    primary_column: Optional[str],
+) -> Dict[str, List[Any]]:
+    if not points or not primary_column:
         return {
             "date": [],
             "value": [],
         }
 
+    filtered_points = [
+        point
+        for point in points
+        if str(point.get("column")) == str(primary_column)
+    ]
+
     return {
-        "date": [
-            pd.Timestamp(date).strftime("%Y-%m-%d")
-            for date in points_df["date"]
-        ],
-        "value": serialize_values(points_df[value_column]),
+        "date": [point.get("date") for point in filtered_points],
+        "value": [point.get("value") for point in filtered_points],
+    }
+
+
+def get_primary_column(
+    preprocess_summary: Dict[str, Any],
+    value_columns: List[str],
+) -> Optional[str]:
+    value_column = preprocess_summary.get("value_column")
+
+    if value_column and value_column in value_columns:
+        return value_column
+
+    if value_columns:
+        return value_columns[0]
+
+    return None
+
+
+# =========================================================
+# 3. Summary payload 생성
+# =========================================================
+
+def build_anomaly_summary(
+    preprocess_summary: Dict[str, Any],
+    anomaly_result: Dict[str, Any],
+    value_columns: List[str],
+    options: Dict[str, str],
+) -> Dict[str, Any]:
+    anomaly_summary = anomaly_result.get("summary", {})
+
+    data_count = preprocess_summary.get("final_count")
+    anomaly_count = anomaly_result.get("anomaly_count", 0)
+
+    if data_count:
+        anomaly_ratio = anomaly_count / data_count * 100
+    else:
+        anomaly_ratio = anomaly_result.get("anomaly_ratio")
+
+    return {
+        "mode": "anomaly",
+
+        "method": anomaly_result.get("method"),
+        "resolved_method": anomaly_result.get("resolved_method"),
+        "sensitivity": options.get("sensitivity"),
+        "sensitivity_label": options.get("sensitivity_label"),
+        "threshold": anomaly_result.get("threshold"),
+
+        "date_column": preprocess_summary.get("date_column"),
+        "value_column": preprocess_summary.get("value_column"),
+        "value_columns": value_columns,
+        "numeric_columns": value_columns,
+        "frequency": preprocess_summary.get("frequency"),
+
+        "original_count": preprocess_summary.get("original_count"),
+        "valid_count": preprocess_summary.get("valid_count"),
+        "final_count": preprocess_summary.get("final_count"),
+        "data_count": data_count,
+        "variable_count": len(value_columns),
+
+        "missing_count": preprocess_summary.get("missing_count", 0),
+        "protected_count": preprocess_summary.get("protected_count", 0),
+
+        "anomaly_count": anomaly_count,
+        "anomaly_ratio": anomaly_result.get("anomaly_ratio", anomaly_ratio),
+        "outlier_count": anomaly_count,
+
+        "top_variable": anomaly_result.get(
+            "top_variable",
+            anomaly_summary.get("top_variable"),
+        ),
+        "top_anomaly_date": anomaly_result.get(
+            "top_anomaly_date",
+            anomaly_summary.get("top_anomaly_date"),
+        ),
+        "top_anomaly_score": anomaly_result.get(
+            "top_anomaly_score",
+            anomaly_summary.get("top_anomaly_score"),
+        ),
+
+        "message": anomaly_result.get("message", ""),
     }
 
 
 # =========================================================
-# 3. Forecast - 검증 예측 시계열 생성
-# =========================================================
-
-def build_validation_series(
-    forecast_result: Dict[str, Any],
-) -> Dict[str, Any]:
-    validation_dates = forecast_result.get("validation_dates", [])
-    model_results = forecast_result.get("model_results", {})
-
-    series = {}
-
-    for model_name, result in model_results.items():
-        validation_pred = result.get("validation_pred", [])
-
-        series[model_name] = {
-            "date": validation_dates[:len(validation_pred)],
-            "value": validation_pred,
-            "success": result.get("success", False),
-            "message": result.get("message", ""),
-        }
-
-    return series
-
-
-def build_future_series(
-    forecast_result: Dict[str, Any],
-) -> Dict[str, Any]:
-    model_results = forecast_result.get("model_results", {})
-
-    series = {}
-
-    for model_name, result in model_results.items():
-        future_pred = result.get("future_pred", [])
-        future_dates = result.get("future_dates", [])
-
-        if not future_pred and not future_dates:
-            continue
-
-        series[model_name] = {
-            "date": future_dates,
-            "value": future_pred,
-            "success": result.get("success", False),
-            "message": result.get("message", ""),
-        }
-
-    return series
-
-
-# =========================================================
-# 4. Forecast - 시계열 payload
+# 4. Time series payload 생성
+# ---------------------------------------------------------
+# result.js / anomaly-chart.js에서 공통으로 사용할 데이터
 # =========================================================
 
 def build_time_series_payload(
     preprocess_result: Dict[str, Any],
+    anomaly_result: Dict[str, Any],
+    primary_column: Optional[str],
 ) -> Dict[str, Any]:
-    return {
-        "date": preprocess_result["date"],
-        "original": preprocess_result["original_value"],
-        "filled": preprocess_result["filled_value"],
-        "preprocessed": preprocess_result["preprocessed_value"],
-        "missing_points": serialize_points(
-            preprocess_result["missing_points"],
-            value_column="value_filled",
-        ),
-        "outlier_points": serialize_points(
-            preprocess_result["outlier_points"],
-            value_column="value_filled",
-        ),
-        "protected_points": serialize_points(
-            preprocess_result["protected_points"],
-            value_column="value_filled",
-        ),
-    }
+    date_values = preprocess_result.get("date", [])
+    original_values = preprocess_result.get("original_values", {})
+    filled_values = preprocess_result.get("filled_values", {})
+    preprocessed_values = preprocess_result.get("preprocessed_values", filled_values)
 
+    primary_original = []
+    primary_filled = []
+    primary_preprocessed = []
 
-# =========================================================
-# 5. Forecast - 요약 payload
-# =========================================================
+    if primary_column:
+        primary_original = original_values.get(primary_column, [])
+        primary_filled = filled_values.get(primary_column, [])
+        primary_preprocessed = preprocessed_values.get(primary_column, primary_filled)
 
-def build_forecast_analysis_summary(
-    preprocess_summary: Dict[str, Any],
-    decomposition_result: Dict[str, Any],
-    forecast_result: Dict[str, Any],
-    metrics_dashboard: List[Dict[str, Any]],
-    horizon: Union[int, str],
-) -> Dict[str, Any]:
-    best_model = get_best_model(metrics_dashboard)
+    missing_points_long = preprocess_result.get("missing_points_long", [])
+    protected_points_long = preprocess_result.get("protected_points_long", [])
 
     return {
-        "mode": "forecast",
-        "best_model": best_model,
-        "horizon": horizon,
-        "date_column": preprocess_summary.get("date_column"),
-        "value_column": preprocess_summary.get("value_column"),
-        "frequency": preprocess_summary.get("frequency"),
-        "data_count": preprocess_summary.get("final_count"),
-        "missing_count": preprocess_summary.get("missing_count"),
-        "outlier_count": preprocess_summary.get("outlier_count"),
-        "protected_count": preprocess_summary.get("protected_count"),
-        "decomposition_method": decomposition_result.get("method"),
-        "seasonal_period": forecast_result.get("seasonal_period"),
-        "validation_length": forecast_result.get("validation_length"),
-    }
+        "date": date_values,
 
+        # 다변량 전체 값
+        "value_columns": preprocess_result.get("value_columns", []),
+        "original_values": original_values,
+        "filled_values": filled_values,
+        "preprocessed_values": preprocessed_values,
 
-# 기존 코드 호환용 alias
-def build_analysis_summary(
-    preprocess_summary: Dict[str, Any],
-    decomposition_result: Dict[str, Any],
-    forecast_result: Dict[str, Any],
-    metrics_dashboard: List[Dict[str, Any]],
-    horizon: Union[int, str],
-) -> Dict[str, Any]:
-    return build_forecast_analysis_summary(
-        preprocess_summary=preprocess_summary,
-        decomposition_result=decomposition_result,
-        forecast_result=forecast_result,
-        metrics_dashboard=metrics_dashboard,
-        horizon=horizon,
-    )
+        # anomaly.py 결과
+        "series": anomaly_result.get("series", {}),
+        "anomaly_score": anomaly_result.get("score", []),
+        "score": anomaly_result.get("score", []),
+        "raw_score": anomaly_result.get("raw_score", []),
+        "is_anomaly": anomaly_result.get("is_anomaly", []),
 
+        "feature_scores": anomaly_result.get("feature_scores", {}),
+        "raw_feature_scores": anomaly_result.get("raw_feature_scores", {}),
+        "feature_anomaly_matrix": anomaly_result.get("feature_anomaly_matrix", {}),
+        "protected_mask": anomaly_result.get("protected_mask", {}),
 
-# =========================================================
-# 6. Forecast 분석 실행
-# =========================================================
+        "anomaly_points": anomaly_result.get("anomaly_points", {}),
+        "protected_points_by_feature": anomaly_result.get("protected_points", {}),
 
-def run_time_series_forecast_analysis(
-    data: List[Dict[str, Any]],
-    horizon: Any = 12,
-    protected_cells: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    if protected_cells is None:
-        protected_cells = []
+        # 데이터 품질 포인트
+        "missing_points_long": missing_points_long,
+        "protected_points_long": protected_points_long,
 
-    horizon = normalize_forecast_horizon(horizon)
-
-    preprocess_result = preprocess_time_series(
-        data=data,
-        protected_cells=protected_cells,
-    )
-
-    processed_df = preprocess_result["df"]
-    preprocess_summary = preprocess_result["summary"]
-
-    decomposition_result = decompose_time_series(
-        df=processed_df,
-        frequency=preprocess_summary.get("frequency"),
-        value_column="value_preprocessed",
-    )
-
-    seasonal_period = decomposition_result.get("period")
-
-    forecast_result = run_all_forecasts(
-        df=processed_df,
-        horizon=horizon,
-        frequency=preprocess_summary.get("frequency"),
-        value_column="value_preprocessed",
-        seasonal_period=seasonal_period,
-    )
-
-    model_results = forecast_result["model_results"]
-
-    validation_length = forecast_result.get(
-        "validation_length",
-        len(forecast_result.get("test_values", [])),
-    )
-
-    y_test_for_metrics = forecast_result.get("test_values", [])[:validation_length]
-
-    metrics_dashboard = build_metrics_dashboard(
-        model_results=model_results,
-        y_train=forecast_result.get("train_values", []),
-        y_test=y_test_for_metrics,
-    )
-
-    summary = build_forecast_analysis_summary(
-        preprocess_summary=preprocess_summary,
-        decomposition_result=decomposition_result,
-        forecast_result=forecast_result,
-        metrics_dashboard=metrics_dashboard,
-        horizon=horizon,
-    )
-
-    return {
-        "summary": summary,
-
-        "time_series": build_time_series_payload(preprocess_result),
-
-        "decomposition": {
-            "date": preprocess_result["date"],
-            "trend": decomposition_result.get("trend", []),
-            "seasonal": decomposition_result.get("seasonal", []),
-            "residual": decomposition_result.get("residual", []),
-            "method": decomposition_result.get("method"),
-            "period": decomposition_result.get("period"),
+        # 기존 chart.js와의 호환 필드
+        "primary_column": primary_column,
+        "original": primary_original,
+        "filled": primary_filled,
+        "preprocessed": primary_preprocessed,
+        "missing_points": serialize_primary_points(
+            missing_points_long,
+            primary_column,
+        ),
+        "protected_points": serialize_primary_points(
+            protected_points_long,
+            primary_column,
+        ),
+        "outlier_points": {
+            "date": anomaly_result.get("anomaly_points", {}).get("date", []),
+            "value": anomaly_result.get("anomaly_points", {}).get("value", []),
         },
-
-        "forecast": {
-            "train_dates": forecast_result.get("train_dates", []),
-            "train_values": forecast_result.get("train_values", []),
-            "validation_dates": forecast_result.get("validation_dates", []),
-            "validation_actual": forecast_result.get("test_values", [])[:validation_length],
-            "validation": build_validation_series(forecast_result),
-            "future": build_future_series(forecast_result),
-            "horizon": forecast_result.get("horizon", horizon),
-            "validation_length": validation_length,
-            "seasonal_period": forecast_result.get("seasonal_period"),
-        },
-
-        "metrics_dashboard": metrics_dashboard,
-
-        "model_results": model_results,
     }
 
 
-# 기존 main.py 호환용 함수명
-def run_time_series_analysis(
-    data: List[Dict[str, Any]],
-    horizon: Any = 12,
-    protected_cells: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    return run_time_series_forecast_analysis(
-        data=data,
-        horizon=horizon,
-        protected_cells=protected_cells,
-    )
-
-
 # =========================================================
-# 7. Anomaly - 전처리 payload
+# 5. 데이터 품질 payload 생성
 # =========================================================
 
-def build_multivariate_preprocess_payload(
+def build_data_quality_payload(
     preprocess_result: Dict[str, Any],
 ) -> Dict[str, Any]:
     summary = preprocess_result.get("summary", {})
 
+    missing_points_long = preprocess_result.get("missing_points_long", [])
+    protected_points_long = preprocess_result.get("protected_points_long", [])
+
     return {
-        "date": preprocess_result.get("date", []),
+        "date_column": summary.get("date_column"),
+        "value_column": summary.get("value_column"),
         "value_columns": preprocess_result.get("value_columns", []),
-        "original_values": preprocess_result.get("original_values", {}),
-        "filled_values": preprocess_result.get("filled_values", {}),
-        "missing_count": preprocess_result.get("missing_count"),
+        "numeric_columns": preprocess_result.get("numeric_columns", []),
+
+        "frequency": summary.get("frequency"),
+
+        "original_count": summary.get("original_count"),
+        "valid_count": summary.get("valid_count"),
+        "final_count": summary.get("final_count"),
+
+        "missing_count": summary.get("missing_count", 0),
+        "missing_by_column": summary.get("missing_by_column", {}),
+
+        "protected_count": summary.get("protected_count", 0),
         "protected_dates": summary.get("protected_dates", []),
         "protected_date_map": summary.get("protected_date_map", {}),
-        "summary": summary,
+
+        "missing_points": serialize_point_list(missing_points_long),
+        "protected_points": serialize_point_list(protected_points_long),
+
+        "missing_points_long": missing_points_long,
+        "protected_points_long": protected_points_long,
     }
 
 
 # =========================================================
-# 8. Anomaly 분석 실행
+# 6. 이상탐지 대시보드 payload 생성
+# =========================================================
+
+def build_anomaly_dashboard_payload(
+    anomaly_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "score_timeline": anomaly_result.get("score_timeline", {}),
+        "heatmap": anomaly_result.get("heatmap", {}),
+
+        "feature_contribution": anomaly_result.get("feature_contribution", []),
+        "variable_summary": anomaly_result.get(
+            "variable_summary",
+            anomaly_result.get("feature_contribution", []),
+        ),
+
+        "top_anomaly_contribution": anomaly_result.get(
+            "top_anomaly_contribution",
+            {
+                "date": None,
+                "items": [],
+            },
+        ),
+
+        "anomaly_table": anomaly_result.get("anomaly_table", []),
+        "top_anomaly_table": anomaly_result.get(
+            "top_anomaly_table",
+            anomaly_result.get("anomaly_table", [])[:20],
+        ),
+
+        "anomaly_type_summary": anomaly_result.get("anomaly_type_summary", []),
+
+        "download_rows": anomaly_result.get("download_rows", []),
+    }
+
+
+# =========================================================
+# 7. 다변량 이상탐지 분석 실행
 # =========================================================
 
 def run_time_series_anomaly_analysis(
     data: List[Dict[str, Any]],
     protected_cells: Optional[List[Dict[str, Any]]] = None,
     anomaly_options: Optional[Dict[str, Any]] = None,
+    method: Optional[str] = None,
+    sensitivity: Optional[str] = None,
 ) -> Dict[str, Any]:
     if protected_cells is None:
         protected_cells = []
 
-    options = normalize_anomaly_options(anomaly_options)
+    options = normalize_anomaly_options(
+        anomaly_options=anomaly_options,
+        method=method,
+        sensitivity=sensitivity,
+    )
 
     preprocess_result = preprocess_multivariate_time_series(
         data=data,
@@ -386,12 +446,15 @@ def run_time_series_anomaly_analysis(
     )
 
     processed_df = preprocess_result["df"]
-    preprocess_summary = preprocess_result["summary"]
+    preprocess_summary = preprocess_result.get("summary", {})
 
     value_columns = preprocess_result.get(
         "value_columns",
         preprocess_summary.get("value_columns", []),
     )
+
+    if not value_columns:
+        raise ValueError("이상탐지에 사용할 숫자형 컬럼이 없습니다.")
 
     protected_dates = preprocess_summary.get("protected_dates", [])
     protected_date_map = preprocess_summary.get("protected_date_map", {})
@@ -407,99 +470,134 @@ def run_time_series_anomaly_analysis(
         protected_date_map=protected_date_map,
     )
 
-    anomaly_payload = build_anomaly_metrics_payload(
-        anomaly_result=anomaly_result,
+    primary_column = get_primary_column(
         preprocess_summary=preprocess_summary,
+        value_columns=value_columns,
     )
 
-    anomaly_payload = attach_anomaly_interpretation(anomaly_payload)
-
-    # ---------------------------------------------------------
-    # anomaly_metrics.py가 모든 신규 필드를 그대로 올려주지 않을 수 있으므로
-    # result.js / anomaly-chart.js에서 바로 접근할 수 있게 top-level에 보강
-    # ---------------------------------------------------------
-
-    anomaly_payload["summary"]["mode"] = "anomaly"
-    anomaly_payload["summary"]["method"] = anomaly_result.get("method")
-    anomaly_payload["summary"]["resolved_method"] = anomaly_result.get("resolved_method")
-    anomaly_payload["summary"]["sensitivity"] = anomaly_result.get("sensitivity")
-    anomaly_payload["summary"]["threshold"] = anomaly_result.get("threshold")
-    anomaly_payload["summary"]["anomaly_count"] = anomaly_result.get("anomaly_count")
-    anomaly_payload["summary"]["anomaly_ratio"] = anomaly_result.get("anomaly_ratio")
-    anomaly_payload["summary"]["top_anomaly_date"] = anomaly_result.get("top_anomaly_date")
-    anomaly_payload["summary"]["top_anomaly_score"] = anomaly_result.get("top_anomaly_score")
-    anomaly_payload["summary"]["data_count"] = preprocess_summary.get("final_count")
-    anomaly_payload["summary"]["variable_count"] = len(value_columns)
-    anomaly_payload["summary"]["missing_count"] = preprocess_summary.get("missing_count")
-    anomaly_payload["summary"]["protected_count"] = preprocess_summary.get("protected_count")
-    anomaly_payload["summary"]["date_column"] = preprocess_summary.get("date_column")
-    anomaly_payload["summary"]["value_columns"] = value_columns
-    anomaly_payload["summary"]["frequency"] = preprocess_summary.get("frequency")
-
-    anomaly_payload["date"] = anomaly_result.get("date", [])
-    anomaly_payload["value_columns"] = anomaly_result.get("value_columns", [])
-    anomaly_payload["series"] = anomaly_result.get("series", {})
-
-    anomaly_payload["score"] = anomaly_result.get("score", [])
-    anomaly_payload["is_anomaly"] = anomaly_result.get("is_anomaly", [])
-
-    anomaly_payload["feature_scores"] = anomaly_result.get("feature_scores", {})
-    anomaly_payload["feature_anomaly_matrix"] = anomaly_result.get(
-        "feature_anomaly_matrix",
-        {},
-    )
-    anomaly_payload["protected_mask"] = anomaly_result.get("protected_mask", {})
-
-    anomaly_payload["anomaly_points"] = anomaly_result.get("anomaly_points", {})
-    anomaly_payload["protected_points"] = anomaly_result.get("protected_points", {})
-
-    anomaly_payload["feature_contribution"] = anomaly_result.get(
-        "feature_contribution",
-        [],
-    )
-    anomaly_payload["anomaly_table"] = anomaly_result.get("anomaly_table", [])
-
-    anomaly_payload["protected_dates"] = anomaly_result.get("protected_dates", [])
-    anomaly_payload["protected_date_map"] = anomaly_result.get(
-        "protected_date_map",
-        {},
+    summary = build_anomaly_summary(
+        preprocess_summary=preprocess_summary,
+        anomaly_result=anomaly_result,
+        value_columns=value_columns,
+        options=options,
     )
 
-    anomaly_payload["preprocessing"] = build_multivariate_preprocess_payload(
-        preprocess_result,
+    time_series = build_time_series_payload(
+        preprocess_result=preprocess_result,
+        anomaly_result=anomaly_result,
+        primary_column=primary_column,
     )
 
-    anomaly_payload["anomaly_options"] = options
-    anomaly_payload["raw_anomaly_result"] = anomaly_result
+    data_quality = build_data_quality_payload(
+        preprocess_result=preprocess_result,
+    )
 
-    return anomaly_payload
+    dashboard = build_anomaly_dashboard_payload(
+        anomaly_result=anomaly_result,
+    )
+
+    # -----------------------------------------------------
+    # 프론트엔드에서 접근하기 쉽게 top-level에도 주요 필드 배치
+    # -----------------------------------------------------
+    result = {
+        "summary": summary,
+
+        "time_series": time_series,
+        "data_quality": data_quality,
+
+        "anomaly": {
+            "method": anomaly_result.get("method"),
+            "resolved_method": anomaly_result.get("resolved_method"),
+            "sensitivity": anomaly_result.get("sensitivity"),
+            "sensitivity_label": anomaly_result.get("sensitivity_label"),
+            "threshold": anomaly_result.get("threshold"),
+            "message": anomaly_result.get("message", ""),
+
+            **dashboard,
+        },
+
+        # 메뉴형 그래프에서 바로 접근할 수 있도록 top-level 제공
+        "score_timeline": dashboard["score_timeline"],
+        "heatmap": dashboard["heatmap"],
+        "feature_contribution": dashboard["feature_contribution"],
+        "variable_summary": dashboard["variable_summary"],
+        "top_anomaly_contribution": dashboard["top_anomaly_contribution"],
+        "anomaly_table": dashboard["anomaly_table"],
+        "top_anomaly_table": dashboard["top_anomaly_table"],
+        "anomaly_type_summary": dashboard["anomaly_type_summary"],
+        "download_rows": dashboard["download_rows"],
+
+        # 기존 result.js 호환용
+        "metrics_dashboard": [],
+        "model_results": {},
+
+        # 상세 원본 결과
+        "anomaly_result": anomaly_result,
+        "preprocessing": {
+            "date": preprocess_result.get("date", []),
+            "value_columns": value_columns,
+            "original_values": preprocess_result.get("original_values", {}),
+            "filled_values": preprocess_result.get("filled_values", {}),
+            "preprocessed_values": preprocess_result.get("preprocessed_values", {}),
+            "summary": preprocess_summary,
+        },
+        "anomaly_options": options,
+    }
+
+    return result
 
 
 # =========================================================
-# 9. 통합 분석 실행
+# 8. 통합 분석 실행
+# ---------------------------------------------------------
+# 예측 기능은 제외하고 모든 요청을 anomaly 분석으로 처리
 # =========================================================
 
 def run_analysis(
     data: List[Dict[str, Any]],
-    mode: str = "forecast",
+    mode: str = "anomaly",
     horizon: Any = 12,
     protected_cells: Optional[List[Dict[str, Any]]] = None,
     anomaly_options: Optional[Dict[str, Any]] = None,
+    method: Optional[str] = None,
+    sensitivity: Optional[str] = None,
 ) -> Dict[str, Any]:
     if protected_cells is None:
         protected_cells = []
 
-    normalized_mode = normalize_analysis_mode(mode)
+    _ = normalize_analysis_mode(mode)
 
-    if normalized_mode == "anomaly":
-        return run_time_series_anomaly_analysis(
-            data=data,
-            protected_cells=protected_cells,
-            anomaly_options=anomaly_options,
-        )
-
-    return run_time_series_forecast_analysis(
+    return run_time_series_anomaly_analysis(
         data=data,
+        protected_cells=protected_cells,
+        anomaly_options=anomaly_options,
+        method=method,
+        sensitivity=sensitivity,
+    )
+
+
+# =========================================================
+# 9. 기존 main.py 호환용 함수명
+# ---------------------------------------------------------
+# 기존 main.py가 run_time_series_analysis를 import하고 있어도
+# 오류 없이 이상탐지 분석이 실행되도록 유지
+# =========================================================
+
+def run_time_series_analysis(
+    data: List[Dict[str, Any]],
+    horizon: Any = 12,
+    protected_cells: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "anomaly",
+    anomaly_options: Optional[Dict[str, Any]] = None,
+    method: Optional[str] = None,
+    sensitivity: Optional[str] = None,
+) -> Dict[str, Any]:
+    return run_analysis(
+        data=data,
+        mode=mode,
         horizon=horizon,
         protected_cells=protected_cells,
+        anomaly_options=anomaly_options,
+        method=method,
+        sensitivity=sensitivity,
     )

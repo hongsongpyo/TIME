@@ -4,10 +4,11 @@
 역할
 1. FastAPI 서버 주소 관리
 2. CSV 업로드 API 요청
-3. 자동 분석 API 요청
-4. 예측 / 이상탐지 mode 분기용 payload 생성
+3. 다변량 시계열 이상탐지 API 요청
+4. 민감도 / 탐지 방법 payload 생성
 5. API 응답/에러 공통 처리
-6. 전역 변수 충돌 방지
+6. 기존 호출 방식과의 호환성 유지
+7. 전역 변수 충돌 방지
 ========================================================= */
 
 (function () {
@@ -24,7 +25,7 @@
      2. 기본값
   ========================================================= */
 
-  const DEFAULT_ANALYSIS_MODE = "forecast";
+  const DEFAULT_ANALYSIS_MODE = "anomaly";
 
   const DEFAULT_ANOMALY_OPTIONS = {
     method: "auto",
@@ -70,6 +71,9 @@
 
   /* =========================================================
      4. 분석 모드 정규화
+  ---------------------------------------------------------
+  현재 웹앱은 이상탐지 전용으로 변경
+  기존 코드가 forecast를 보내도 anomaly로 처리
   ========================================================= */
 
   function normalizeAnalysisMode(mode) {
@@ -77,55 +81,44 @@
       .trim()
       .toLowerCase();
 
-    if (modeText === "anomaly") {
+    if (
+      modeText === "anomaly" ||
+      modeText === "anomaly_detection" ||
+      modeText === "detect" ||
+      modeText === "outlier" ||
+      modeText === "이상탐지"
+    ) {
       return "anomaly";
     }
 
-    return "forecast";
-  }
-
-  function isAnalysisMode(value) {
-    const text = String(value || "")
-      .trim()
-      .toLowerCase();
-
-    return text === "forecast" || text === "anomaly";
+    return "anomaly";
   }
 
 
   /* =========================================================
-     5. Horizon 정규화
-  ========================================================= */
-
-  function normalizeHorizon(horizon, mode) {
-    const normalizedMode = normalizeAnalysisMode(mode);
-
-    if (normalizedMode === "anomaly") {
-      return 1;
-    }
-
-    if (horizon === "auto") {
-      return "auto";
-    }
-
-    const horizonValue = Number(horizon);
-
-    if (!Number.isFinite(horizonValue) || horizonValue <= 0) {
-      return 12;
-    }
-
-    return Math.floor(horizonValue);
-  }
-
-
-  /* =========================================================
-     6. 이상탐지 옵션 정규화
+     5. 이상탐지 방법 정규화
   ========================================================= */
 
   function normalizeAnomalyMethod(method) {
     const methodText = String(method || DEFAULT_ANOMALY_OPTIONS.method)
       .trim()
       .toLowerCase();
+
+    const aliasMap = {
+      "자동": "auto",
+      "오토": "auto",
+      "isolationforest": "isolation_forest",
+      "isolation forest": "isolation_forest",
+      "격리숲": "isolation_forest",
+      "z-score": "zscore",
+      "z score": "zscore",
+      "z스코어": "zscore",
+      "stl": "stl_residual",
+      "stl residual": "stl_residual",
+      "잔차": "stl_residual",
+    };
+
+    const normalizedMethod = aliasMap[methodText] || methodText;
 
     const allowedMethods = [
       "auto",
@@ -135,12 +128,21 @@
       "stl_residual",
     ];
 
-    if (allowedMethods.includes(methodText)) {
-      return methodText;
+    if (allowedMethods.includes(normalizedMethod)) {
+      return normalizedMethod;
     }
 
     return DEFAULT_ANOMALY_OPTIONS.method;
   }
+
+
+  /* =========================================================
+     6. 민감도 정규화
+  ---------------------------------------------------------
+  low    : 낮음  → threshold 높음 → 확실한 이상만 탐지
+  medium : 보통
+  high   : 높음  → threshold 낮음 → 더 많이 탐지
+  ========================================================= */
 
   function normalizeAnomalySensitivity(sensitivity) {
     const sensitivityText = String(
@@ -149,18 +151,42 @@
       .trim()
       .toLowerCase();
 
-    const allowedSensitivities = [
-      "low",
-      "medium",
+    const highValues = [
       "high",
+      "높음",
+      "민감",
+      "높은",
     ];
 
-    if (allowedSensitivities.includes(sensitivityText)) {
-      return sensitivityText;
+    const mediumValues = [
+      "medium",
+      "normal",
+      "보통",
+      "중간",
+      "기본",
+    ];
+
+    const lowValues = [
+      "low",
+      "낮음",
+      "낮은",
+    ];
+
+    if (highValues.includes(sensitivityText)) {
+      return "high";
+    }
+
+    if (lowValues.includes(sensitivityText)) {
+      return "low";
+    }
+
+    if (mediumValues.includes(sensitivityText)) {
+      return "medium";
     }
 
     return DEFAULT_ANOMALY_OPTIONS.sensitivity;
   }
+
 
   function normalizeAnomalyOptions(options) {
     if (!options || typeof options !== "object") {
@@ -178,6 +204,17 @@
 
   /* =========================================================
      7. 특이치 보호 셀 정규화
+  ---------------------------------------------------------
+  형태:
+  [
+    {
+      row: 3,
+      column: "energy"
+    }
+  ]
+
+  특정 셀 단위 보호를 유지한다.
+  같은 행 전체를 보호하지 않는다.
   ========================================================= */
 
   function normalizeProtectedCells(protectedCells) {
@@ -213,33 +250,70 @@
   /* =========================================================
      8. 기존 호출 방식 호환 처리
   ---------------------------------------------------------
-  신규 호출:
-    runAnalysis(tableData, mode, horizon, protectedCells, anomalyOptions)
+  권장 신규 호출:
+    runAnalysis(tableData, protectedCells, anomalyOptions)
 
   기존 호출:
     runAnalysis(tableData, horizon, protectedCells)
+
+  추가 호환 호출:
+    runAnalysis(tableData, "anomaly", horizon, protectedCells, anomalyOptions)
   ========================================================= */
 
-  function parseRunAnalysisArguments(
-    modeOrHorizon,
-    horizonOrProtectedCells,
-    protectedCellsOrAnomalyOptions,
-    anomalyOptionsArg
-  ) {
-    if (isAnalysisMode(modeOrHorizon)) {
+  function looksLikeProtectedCells(value) {
+    return Array.isArray(value);
+  }
+
+  function looksLikeAnomalyOptions(value) {
+    return (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (
+        value.method !== undefined ||
+        value.sensitivity !== undefined
+      )
+    );
+  }
+
+  function parseRunAnalysisArguments(args) {
+    const first = args[0];
+    const second = args[1];
+    const third = args[2];
+    const fourth = args[3];
+
+    // runAnalysis(tableData, protectedCells, anomalyOptions)
+    if (looksLikeProtectedCells(first)) {
       return {
-        mode: normalizeAnalysisMode(modeOrHorizon),
-        horizon: horizonOrProtectedCells,
-        protectedCells: protectedCellsOrAnomalyOptions,
-        anomalyOptions: anomalyOptionsArg,
+        mode: "anomaly",
+        horizon: 1,
+        protectedCells: first,
+        anomalyOptions: looksLikeAnomalyOptions(second)
+          ? second
+          : DEFAULT_ANOMALY_OPTIONS,
       };
     }
 
+    // runAnalysis(tableData, "anomaly", horizon, protectedCells, anomalyOptions)
+    if (typeof first === "string") {
+      return {
+        mode: normalizeAnalysisMode(first),
+        horizon: second || 1,
+        protectedCells: looksLikeProtectedCells(third) ? third : [],
+        anomalyOptions: looksLikeAnomalyOptions(fourth)
+          ? fourth
+          : DEFAULT_ANOMALY_OPTIONS,
+      };
+    }
+
+    // 기존 호출: runAnalysis(tableData, horizon, protectedCells)
     return {
-      mode: "forecast",
-      horizon: modeOrHorizon,
-      protectedCells: horizonOrProtectedCells,
-      anomalyOptions: DEFAULT_ANOMALY_OPTIONS,
+      mode: "anomaly",
+      horizon: 1,
+      protectedCells: looksLikeProtectedCells(second) ? second : [],
+      anomalyOptions: looksLikeAnomalyOptions(third)
+        ? third
+        : DEFAULT_ANOMALY_OPTIONS,
     };
   }
 
@@ -282,43 +356,29 @@
 
 
   /* =========================================================
-     11. 자동 분석 요청
+     11. 자동 이상탐지 요청
   ---------------------------------------------------------
   editor.html에서 사용
 
-  신규 호출 형태:
-  runAnalysis(
-    tableData,
-    mode,
-    horizon,
-    protectedCells,
-    anomalyOptions
-  )
+  권장 호출:
+    runAnalysis(
+      tableData,
+      protectedCells,
+      {
+        method: "auto",
+        sensitivity: "medium"
+      }
+    )
   ========================================================= */
 
-  async function runAnalysis(
-    tableData,
-    modeOrHorizon = "forecast",
-    horizonOrProtectedCells = 12,
-    protectedCellsOrAnomalyOptions = [],
-    anomalyOptionsArg = DEFAULT_ANOMALY_OPTIONS
-  ) {
+  async function runAnalysis(tableData, ...args) {
     if (!Array.isArray(tableData) || tableData.length === 0) {
       throw new Error("분석할 데이터가 없습니다.");
     }
 
-    const parsedArgs = parseRunAnalysisArguments(
-      modeOrHorizon,
-      horizonOrProtectedCells,
-      protectedCellsOrAnomalyOptions,
-      anomalyOptionsArg
-    );
+    const parsedArgs = parseRunAnalysisArguments(args);
 
     const normalizedMode = normalizeAnalysisMode(parsedArgs.mode);
-    const normalizedHorizon = normalizeHorizon(
-      parsedArgs.horizon,
-      normalizedMode
-    );
     const normalizedProtectedCells = normalizeProtectedCells(
       parsedArgs.protectedCells
     );
@@ -326,20 +386,22 @@
       parsedArgs.anomalyOptions
     );
 
-    if (
-      normalizedMode === "forecast" &&
-      normalizedHorizon !== "auto" &&
-      (!Number(normalizedHorizon) || Number(normalizedHorizon) <= 0)
-    ) {
-      throw new Error("시평은 1 이상의 숫자이거나 auto여야 합니다.");
-    }
-
     const payload = {
       data: tableData,
+
+      // 현재 백엔드는 anomaly 전용
       mode: normalizedMode,
-      horizon: normalizedHorizon,
+
+      // 기존 main.py / editor.js 호환용
+      horizon: 1,
+
       protected_cells: normalizedProtectedCells,
+
       anomaly_options: normalizedAnomalyOptions,
+
+      // main.py가 직접 method/sensitivity도 받을 수 있도록 중복 제공
+      method: normalizedAnomalyOptions.method,
+      sensitivity: normalizedAnomalyOptions.sensitivity,
     };
 
     const response = await fetch(`${API_BASE_URL}/analyze`, {
@@ -355,26 +417,7 @@
 
 
   /* =========================================================
-     12. 예측 전용 요청 함수
-  ========================================================= */
-
-  async function runForecastAnalysis(
-    tableData,
-    horizon = 12,
-    protectedCells = []
-  ) {
-    return runAnalysis(
-      tableData,
-      "forecast",
-      horizon,
-      protectedCells,
-      DEFAULT_ANOMALY_OPTIONS
-    );
-  }
-
-
-  /* =========================================================
-     13. 이상탐지 전용 요청 함수
+     12. 이상탐지 전용 요청 함수
   ========================================================= */
 
   async function runAnomalyAnalysis(
@@ -384,10 +427,28 @@
   ) {
     return runAnalysis(
       tableData,
-      "anomaly",
-      1,
       protectedCells,
       anomalyOptions
+    );
+  }
+
+
+  /* =========================================================
+     13. 구버전 함수명 호환
+  ---------------------------------------------------------
+  예측 기능은 제거했지만, 기존 코드에서 runForecastAnalysis를
+  호출하더라도 오류가 나지 않도록 anomaly 분석으로 연결한다.
+  ========================================================= */
+
+  async function runForecastAnalysis(
+    tableData,
+    horizon = 12,
+    protectedCells = []
+  ) {
+    return runAnalysis(
+      tableData,
+      protectedCells,
+      DEFAULT_ANOMALY_OPTIONS
     );
   }
 
@@ -403,7 +464,13 @@
     uploadCSV,
 
     runAnalysis,
-    runForecastAnalysis,
     runAnomalyAnalysis,
+
+    // 구버전 호환용
+    runForecastAnalysis,
+
+    normalizeAnomalyMethod,
+    normalizeAnomalySensitivity,
+    normalizeAnomalyOptions,
   };
 })();

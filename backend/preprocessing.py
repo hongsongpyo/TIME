@@ -3,11 +3,12 @@
 # ---------------------------------------------------------
 # 역할
 # 1. 편집된 표 데이터를 시계열 데이터로 변환
-# 2. 날짜 컬럼 / 수요 컬럼 자동 탐색
-# 3. 결측치 탐지 및 보간
-# 4. 이상치 탐지 및 보정
+# 2. 날짜 컬럼 / 대표 값 컬럼 자동 탐색
+# 3. 결측 timestamp 생성 및 결측치 보간
+# 4. 단변량 예측 호환용 이상치 탐지 및 보정
 # 5. 사용자가 지정한 특이치는 이상치 처리에서 제외
 # 6. 다변량 이상탐지를 위한 숫자형 컬럼 자동 탐색 및 전처리
+# 7. 다변량 이상탐지에서 특정 셀 단위 특이치 보호 처리
 # =========================================================
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,39 +51,6 @@ def safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def serialize_series_dates(series: pd.Series) -> List[str]:
-    dates = []
-
-    for value in series:
-        try:
-            timestamp = pd.Timestamp(value)
-
-            if (
-                timestamp.hour == 0
-                and timestamp.minute == 0
-                and timestamp.second == 0
-            ):
-                dates.append(timestamp.strftime("%Y-%m-%d"))
-            else:
-                dates.append(timestamp.strftime("%Y-%m-%d %H:%M:%S"))
-        except Exception:
-            dates.append("")
-
-    return dates
-
-
-def serialize_values(series: pd.Series) -> List[Optional[float]]:
-    values = []
-
-    for value in series:
-        if pd.isna(value) or np.isinf(value):
-            values.append(None)
-        else:
-            values.append(float(value))
-
-    return values
-
-
 def normalize_date_string(value: Any) -> Optional[str]:
     try:
         timestamp = pd.Timestamp(value)
@@ -102,25 +70,99 @@ def normalize_date_string(value: Any) -> Optional[str]:
         return None
 
 
+def serialize_series_dates(series: pd.Series) -> List[str]:
+    dates = []
+
+    for value in series:
+        date_string = normalize_date_string(value)
+
+        if date_string is None:
+            dates.append("")
+        else:
+            dates.append(date_string)
+
+    return dates
+
+
+def serialize_values(series: pd.Series) -> List[Optional[float]]:
+    values = []
+
+    for value in series:
+        values.append(safe_float(value))
+
+    return values
+
+
+def serialize_value_dict(
+    df: pd.DataFrame,
+    value_columns: List[str],
+) -> Dict[str, List[Optional[float]]]:
+    values = {}
+
+    for column in value_columns:
+        if column in df.columns:
+            values[str(column)] = serialize_values(df[column])
+        else:
+            values[str(column)] = []
+
+    return values
+
+
+def unique_sorted_date_strings(dates: List[str]) -> List[str]:
+    return sorted(
+        list(
+            set(
+                date
+                for date in dates
+                if date is not None and date != ""
+            )
+        )
+    )
+
+
 # =========================================================
 # 2. 날짜 컬럼 자동 탐색
 # =========================================================
 
 def detect_date_column(df: pd.DataFrame) -> str:
     best_column = None
-    best_score = -1
+    best_score = -1.0
+
+    date_keywords = [
+        "date",
+        "time",
+        "datetime",
+        "timestamp",
+        "ds",
+    ]
 
     for column in df.columns:
         parsed = safe_to_datetime(df[column])
-        score = parsed.notna().sum()
+        parsed_count = int(parsed.notna().sum())
+
+        if parsed_count <= 0:
+            continue
 
         column_name = str(column).lower()
 
-        if "date" in column_name or "time" in column_name:
-            score += 5
+        score = float(parsed_count)
 
-        if column_name in ["ds", "datetime", "timestamp"]:
-            score += 5
+        if any(keyword in column_name for keyword in date_keywords):
+            score += 10.0
+
+        # 숫자형 id 컬럼이 datetime으로 잘못 잡히는 경우를 줄이기 위한 감점
+        numeric_ratio = safe_to_numeric(df[column]).notna().mean()
+
+        if numeric_ratio > 0.8 and not any(
+            keyword in column_name
+            for keyword in date_keywords
+        ):
+            score *= 0.2
+
+        unique_count = parsed.nunique(dropna=True)
+
+        if unique_count <= 1:
+            score *= 0.5
 
         if score > best_score:
             best_score = score
@@ -129,33 +171,44 @@ def detect_date_column(df: pd.DataFrame) -> str:
     if best_column is None or best_score <= 0:
         raise ValueError("날짜 컬럼을 자동으로 찾을 수 없습니다.")
 
-    return best_column
+    return str(best_column)
 
 
 # =========================================================
 # 3. 단변량 값 컬럼 자동 탐색
 # ---------------------------------------------------------
-# 예측 모드에서 사용할 대표 value 컬럼 1개 선택
+# 기존 forecasting/decomposition 호환용 대표 value 컬럼 1개 선택
+# 이상탐지 자체는 다변량 숫자 컬럼 전체를 사용함
 # =========================================================
 
 def detect_value_column(df: pd.DataFrame, date_column: str) -> str:
     best_column = None
     best_score = -1
 
+    priority_keywords = [
+        "value",
+        "demand",
+        "target",
+        "y",
+        "energy",
+        "load",
+        "usage",
+        "sales",
+    ]
+
     for column in df.columns:
         if column == date_column:
             continue
 
         numeric = safe_to_numeric(df[column])
-        score = numeric.notna().sum()
+        score = int(numeric.notna().sum())
 
         column_name = str(column).lower()
 
-        if any(
-            keyword in column_name
-            for keyword in ["value", "demand", "sales", "target", "y"]
-        ):
-            score += 5
+        for index, keyword in enumerate(priority_keywords):
+            if keyword in column_name:
+                score += 100 - index
+                break
 
         if score > best_score:
             best_score = score
@@ -164,7 +217,7 @@ def detect_value_column(df: pd.DataFrame, date_column: str) -> str:
     if best_column is None or best_score <= 0:
         raise ValueError("수요 값 컬럼을 자동으로 찾을 수 없습니다.")
 
-    return best_column
+    return str(best_column)
 
 
 # =========================================================
@@ -186,24 +239,29 @@ def detect_numeric_columns(
         return numeric_columns
 
     for column in df.columns:
+        column = str(column)
+
         if column == date_column:
             continue
 
         numeric = safe_to_numeric(df[column])
-        valid_count = numeric.notna().sum()
+        valid_count = int(numeric.notna().sum())
         valid_ratio = valid_count / row_count
 
         if valid_count > 0 and valid_ratio >= min_valid_ratio:
             numeric_columns.append(column)
 
+    # 너무 작은 데이터에서 min_valid_ratio 때문에 모두 제외되는 경우 fallback
     if not numeric_columns:
         for column in df.columns:
+            column = str(column)
+
             if column == date_column:
                 continue
 
             numeric = safe_to_numeric(df[column])
 
-            if numeric.notna().sum() > 0:
+            if int(numeric.notna().sum()) > 0:
                 numeric_columns.append(column)
 
     if not numeric_columns:
@@ -213,7 +271,7 @@ def detect_numeric_columns(
 
 
 # =========================================================
-# 5. 특이치 보호 날짜 생성
+# 5. 특이치 보호 날짜 생성 - 단변량
 # ---------------------------------------------------------
 # protected_cells는 editor.js에서 전달됨
 # 형태:
@@ -227,7 +285,7 @@ def build_protected_dates(
     date_column: str,
     value_column: str,
     protected_cells: List[Dict[str, Any]],
-) -> List[pd.Timestamp]:
+) -> List[str]:
     protected_dates = []
 
     if protected_cells is None:
@@ -252,20 +310,33 @@ def build_protected_dates(
             continue
 
         date_value = raw_df.iloc[row_index][date_column]
-        parsed_date = pd.to_datetime(date_value, errors="coerce")
+        date_string = normalize_date_string(date_value)
 
-        if pd.notna(parsed_date):
-            protected_dates.append(pd.Timestamp(parsed_date))
+        if date_string is not None:
+            protected_dates.append(date_string)
 
-    return protected_dates
+    return unique_sorted_date_strings(protected_dates)
 
+
+# =========================================================
+# 6. 특이치 보호 날짜 생성 - 다변량
+# ---------------------------------------------------------
+# 중요:
+# - 특정 셀만 보호함
+# - energy 셀 하나를 특이치로 지정해도 같은 행의 다른 변수는 자동 보호하지 않음
+# - protected_date_map 구조:
+#   {
+#       "energy": ["2024-01-03"],
+#       "temperature": []
+#   }
+# =========================================================
 
 def build_protected_date_map(
     raw_df: pd.DataFrame,
     date_column: str,
     value_columns: List[str],
     protected_cells: List[Dict[str, Any]],
-) -> Dict[str, List[pd.Timestamp]]:
+) -> Dict[str, List[str]]:
     if protected_cells is None:
         protected_cells = []
 
@@ -300,29 +371,41 @@ def build_protected_date_map(
             continue
 
         date_value = raw_df.iloc[row_index][date_column]
-        parsed_date = pd.to_datetime(date_value, errors="coerce")
+        date_string = normalize_date_string(date_value)
 
-        if pd.notna(parsed_date):
-            protected_map[column_name].append(pd.Timestamp(parsed_date))
+        if date_string is not None:
+            protected_map[column_name].append(date_string)
+
+    for column in protected_map:
+        protected_map[column] = unique_sorted_date_strings(protected_map[column])
 
     return protected_map
 
 
 def flatten_protected_dates(
-    protected_date_map: Dict[str, List[pd.Timestamp]],
-) -> List[pd.Timestamp]:
+    protected_date_map: Dict[str, List[str]],
+) -> List[str]:
     protected_dates = []
 
     for dates in protected_date_map.values():
         protected_dates.extend(dates)
 
-    unique_dates = sorted(set(protected_dates))
+    return unique_sorted_date_strings(protected_dates)
 
-    return unique_dates
+
+def count_protected_cells(
+    protected_date_map: Dict[str, List[str]],
+) -> int:
+    count = 0
+
+    for dates in protected_date_map.values():
+        count += len(dates)
+
+    return int(count)
 
 
 # =========================================================
-# 6. 단변량 시계열 DataFrame 생성
+# 7. 단변량 시계열 DataFrame 생성
 # =========================================================
 
 def build_time_series_dataframe(
@@ -337,6 +420,8 @@ def build_time_series_dataframe(
 
     if raw_df.empty:
         raise ValueError("분석 가능한 데이터가 없습니다.")
+
+    raw_df.columns = [str(column) for column in raw_df.columns]
 
     date_column = detect_date_column(raw_df)
     value_column = detect_value_column(raw_df, date_column)
@@ -365,10 +450,7 @@ def build_time_series_dataframe(
     metadata = {
         "date_column": str(date_column),
         "value_column": str(value_column),
-        "protected_dates": [
-            date.strftime("%Y-%m-%d")
-            for date in protected_dates
-        ],
+        "protected_dates": protected_dates,
         "original_count": len(raw_df),
         "valid_count": len(df),
     }
@@ -377,7 +459,7 @@ def build_time_series_dataframe(
 
 
 # =========================================================
-# 7. 다변량 시계열 DataFrame 생성
+# 8. 다변량 시계열 DataFrame 생성
 # =========================================================
 
 def build_multivariate_time_series_dataframe(
@@ -393,8 +475,11 @@ def build_multivariate_time_series_dataframe(
     if raw_df.empty:
         raise ValueError("분석 가능한 데이터가 없습니다.")
 
+    raw_df.columns = [str(column) for column in raw_df.columns]
+
     date_column = detect_date_column(raw_df)
     value_columns = detect_numeric_columns(raw_df, date_column)
+    value_column = detect_value_column(raw_df, date_column)
 
     protected_date_map = build_protected_date_map(
         raw_df=raw_df,
@@ -407,7 +492,6 @@ def build_multivariate_time_series_dataframe(
     df = raw_df[selected_columns].copy()
 
     df = df.rename(columns={date_column: "date"})
-
     df["date"] = safe_to_datetime(df["date"])
 
     for column in value_columns:
@@ -425,18 +509,11 @@ def build_multivariate_time_series_dataframe(
 
     metadata = {
         "date_column": str(date_column),
+        "value_column": str(value_column),
         "value_columns": [str(column) for column in value_columns],
-        "protected_date_map": {
-            str(column): [
-                date.strftime("%Y-%m-%d")
-                for date in dates
-            ]
-            for column, dates in protected_date_map.items()
-        },
-        "protected_dates": [
-            date.strftime("%Y-%m-%d")
-            for date in protected_dates
-        ],
+        "protected_date_map": protected_date_map,
+        "protected_dates": protected_dates,
+        "protected_count": count_protected_cells(protected_date_map),
         "original_count": len(raw_df),
         "valid_count": len(df),
     }
@@ -445,7 +522,7 @@ def build_multivariate_time_series_dataframe(
 
 
 # =========================================================
-# 8. 주기 자동 추정
+# 9. 주기 자동 추정
 # =========================================================
 
 def infer_frequency(df: pd.DataFrame) -> Optional[str]:
@@ -478,7 +555,6 @@ def infer_frequency(df: pd.DataFrame) -> Optional[str]:
         return None
 
     median_diff = date_diff.median()
-
     seconds = median_diff.total_seconds()
 
     if seconds <= 0:
@@ -538,7 +614,7 @@ def should_regularize_frequency(frequency: Optional[str]) -> bool:
 
 
 # =========================================================
-# 9. 날짜 인덱스 정규화
+# 10. 날짜 인덱스 정규화
 # ---------------------------------------------------------
 # 날짜가 일부 누락된 경우, 추정된 frequency에 맞춰 날짜를 채우고
 # 이후 결측치로 처리
@@ -570,6 +646,7 @@ def regularize_time_index(
             freq=frequency,
         )
 
+        # 잘못 추정된 frequency로 인해 원본보다 짧아지는 경우 정규화하지 않음
         if len(full_index) < len(df):
             return df.reset_index(drop=True)
 
@@ -586,7 +663,7 @@ def regularize_time_index(
 
 
 # =========================================================
-# 10. 결측치 처리
+# 11. 결측치 처리
 # =========================================================
 
 def fill_missing_series(series: pd.Series) -> pd.Series:
@@ -623,10 +700,10 @@ def fill_missing_multivariate(
 
 
 # =========================================================
-# 11. 단변량 이상치 탐지
+# 12. 단변량 이상치 탐지
 # ---------------------------------------------------------
-# forecast 전처리에서만 사용
-# 이상탐지 모드에서는 anomaly.py에서 별도로 탐지
+# 기존 forecast 전처리 호환용
+# 이상탐지 모드에서는 anomaly.py에서 별도로 anomaly score 계산
 # =========================================================
 
 def detect_outlier_mask(
@@ -698,7 +775,7 @@ def replace_outliers_with_interpolation(
 
 
 # =========================================================
-# 12. 포인트 직렬화용 DataFrame 생성
+# 13. 포인트 직렬화용 DataFrame 생성
 # =========================================================
 
 def build_point_dataframe(
@@ -740,10 +817,90 @@ def build_protected_point_dataframe(
 
 
 # =========================================================
-# 13. 단변량 시계열 전처리
+# 14. 다변량 포인트 직렬화
+# =========================================================
+
+def build_multivariate_missing_points(
+    df: pd.DataFrame,
+    missing_mask_df: pd.DataFrame,
+    value_columns: List[str],
+) -> List[Dict[str, Any]]:
+    points = []
+
+    if df is None or df.empty:
+        return points
+
+    for column in value_columns:
+        if column not in missing_mask_df.columns:
+            continue
+
+        mask = missing_mask_df[column].fillna(False)
+
+        for index in df.index[mask]:
+            points.append(
+                {
+                    "date": normalize_date_string(df.loc[index, "date"]),
+                    "column": str(column),
+                    "value": None,
+                }
+            )
+
+    return points
+
+
+def build_multivariate_protected_points(
+    df: pd.DataFrame,
+    value_columns: List[str],
+    protected_date_map: Dict[str, List[str]],
+) -> List[Dict[str, Any]]:
+    points = []
+
+    if df is None or df.empty:
+        return points
+
+    date_strings = df["date"].apply(normalize_date_string)
+
+    for column in value_columns:
+        protected_dates = protected_date_map.get(str(column), [])
+
+        if not protected_dates:
+            continue
+
+        protected_set = set(protected_dates)
+        mask = date_strings.isin(protected_set)
+
+        for index in df.index[mask]:
+            points.append(
+                {
+                    "date": date_strings.loc[index],
+                    "column": str(column),
+                    "value": safe_float(df.loc[index, column]),
+                }
+            )
+
+    return points
+
+
+def build_missing_count_by_column(
+    missing_mask_df: pd.DataFrame,
+    value_columns: List[str],
+) -> Dict[str, int]:
+    result = {}
+
+    for column in value_columns:
+        if column in missing_mask_df.columns:
+            result[str(column)] = int(missing_mask_df[column].sum())
+        else:
+            result[str(column)] = 0
+
+    return result
+
+
+# =========================================================
+# 15. 단변량 시계열 전처리
 # ---------------------------------------------------------
 # 기존 forecasting/decomposition/metrics 흐름과 호환
-# analysis.py의 기존 run_time_series_analysis에서 사용
+# 현재 이상탐지 전용 화면으로 바꾸더라도 기존 import 오류 방지를 위해 유지
 # =========================================================
 
 def preprocess_time_series(
@@ -787,6 +944,14 @@ def preprocess_time_series(
         outlier_mask=outlier_mask,
     )
 
+    protected_mask = df["date"].apply(
+        lambda value: normalize_date_string(value) in set(protected_dates)
+    )
+
+    df["is_missing"] = missing_mask
+    df["is_outlier"] = outlier_mask
+    df["is_protected"] = protected_mask
+
     missing_points = build_point_dataframe(
         df=df,
         mask=missing_mask,
@@ -817,7 +982,7 @@ def preprocess_time_series(
 
         "missing_count": int(missing_mask.sum()),
         "outlier_count": int(outlier_mask.sum()),
-        "protected_count": len(protected_dates),
+        "protected_count": int(protected_mask.sum()),
 
         "protected_dates": protected_dates,
     }
@@ -839,7 +1004,7 @@ def preprocess_time_series(
 
 
 # =========================================================
-# 14. 다변량 시계열 전처리
+# 16. 다변량 시계열 전처리
 # ---------------------------------------------------------
 # 신규 anomaly.py / analysis.py 이상탐지 흐름에서 사용
 # =========================================================
@@ -878,17 +1043,55 @@ def preprocess_multivariate_time_series(
 
     missing_mask_df = original_df[value_columns].isna()
     missing_count = int(missing_mask_df.sum().sum())
+    missing_by_column = build_missing_count_by_column(
+        missing_mask_df=missing_mask_df,
+        value_columns=value_columns,
+    )
 
     filled_df = fill_missing_multivariate(
         df=original_df,
         value_columns=value_columns,
     )
 
+    protected_date_map = metadata.get("protected_date_map", {})
     protected_dates = metadata.get("protected_dates", [])
+    protected_count = metadata.get(
+        "protected_count",
+        count_protected_cells(protected_date_map),
+    )
+
+    date_values = serialize_series_dates(filled_df["date"])
+
+    original_values = serialize_value_dict(
+        df=original_df,
+        value_columns=value_columns,
+    )
+
+    filled_values = serialize_value_dict(
+        df=filled_df,
+        value_columns=value_columns,
+    )
+
+    missing_points_long = build_multivariate_missing_points(
+        df=filled_df,
+        missing_mask_df=missing_mask_df,
+        value_columns=value_columns,
+    )
+
+    protected_points_long = build_multivariate_protected_points(
+        df=filled_df,
+        value_columns=value_columns,
+        protected_date_map=protected_date_map,
+    )
+
+    # anomaly.py에서 사용할 수 있도록 날짜 문자열 컬럼 추가
+    filled_df["date_string"] = date_values
 
     summary = {
         "date_column": metadata.get("date_column"),
+        "value_column": metadata.get("value_column"),
         "value_columns": value_columns,
+        "numeric_columns": value_columns,
 
         "frequency": frequency,
 
@@ -897,24 +1100,16 @@ def preprocess_multivariate_time_series(
         "final_count": len(filled_df),
 
         "missing_count": missing_count,
+        "missing_by_column": missing_by_column,
+
+        # 실제 이상치 수는 anomaly.py에서 계산
         "outlier_count": None,
-        "protected_count": len(protected_dates),
+        "anomaly_count": None,
 
+        "protected_count": protected_count,
         "protected_dates": protected_dates,
-        "protected_date_map": metadata.get("protected_date_map", {}),
+        "protected_date_map": protected_date_map,
     }
-
-    date_values = serialize_series_dates(filled_df["date"])
-
-    original_values = {}
-
-    for column in value_columns:
-        original_values[str(column)] = serialize_values(original_df[column])
-
-    filled_values = {}
-
-    for column in value_columns:
-        filled_values[str(column)] = serialize_values(filled_df[column])
 
     return {
         "df": filled_df,
@@ -923,11 +1118,18 @@ def preprocess_multivariate_time_series(
 
         "date": date_values,
         "value_columns": value_columns,
+        "numeric_columns": value_columns,
 
         "original_values": original_values,
         "filled_values": filled_values,
+        "preprocessed_values": filled_values,
 
         "missing_count": missing_count,
+        "missing_by_column": missing_by_column,
+        "missing_points_long": missing_points_long,
+
+        "protected_count": protected_count,
         "protected_dates": protected_dates,
-        "protected_date_map": metadata.get("protected_date_map", {}),
+        "protected_date_map": protected_date_map,
+        "protected_points_long": protected_points_long,
     }

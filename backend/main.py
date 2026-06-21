@@ -5,8 +5,8 @@
 # 1. FastAPI 서버 실행
 # 2. 프론트엔드와 통신할 API 제공
 # 3. CSV 업로드 확인
-# 4. 편집된 표 데이터를 받아 자동 시계열 분석 실행
-# 5. mode 값에 따라 예측 분석 / 이상탐지 분석 분기
+# 4. 편집된 표 데이터를 받아 다변량 시계열 이상탐지 실행
+# 5. 민감도 / 탐지 방법 옵션을 받아 anomaly.py로 전달
 # =========================================================
 
 from typing import Any, Dict, List, Optional
@@ -28,8 +28,8 @@ from analysis import run_analysis
 
 app = FastAPI(
     title="TIME API",
-    description="CSV 기반 시계열 자동 분석, 예측 및 이상탐지 API",
-    version="2.0.0",
+    description="CSV 기반 다변량 시계열 이상탐지 API",
+    version="3.0.0",
 )
 
 
@@ -60,26 +60,34 @@ app.add_middleware(
 # =========================================================
 
 class AnomalyOptions(BaseModel):
+    # auto, isolation_forest, zscore, iqr, stl_residual
     method: str = "auto"
+
+    # low, medium, high
     sensitivity: str = "medium"
 
 
 class AnalysisRequest(BaseModel):
+    # editor.html에서 전달하는 표 데이터
     data: List[Dict[str, Any]]
 
-    # forecast: 기존 예측 분석
-    # anomaly : 신규 이상탐지 분석
-    mode: str = "forecast"
+    # 기존 forecast 구조와 호환하기 위해 유지
+    # 현재 서버는 어떤 mode가 들어와도 anomaly 분석으로 처리함
+    mode: Optional[str] = "anomaly"
 
-    # forecast 모드에서 사용
-    # anomaly 모드에서는 사용하지 않지만 기존 프론트와 호환을 위해 유지
+    # 기존 예측 기능 호환 필드
+    # 이상탐지에서는 사용하지 않음
     horizon: Optional[Any] = 12
 
     # editor.html에서 사용자가 특이치로 지정한 셀
     protected_cells: Optional[List[Dict[str, Any]]] = None
 
-    # anomaly 모드에서 사용
+    # 이상탐지 옵션
     anomaly_options: Optional[AnomalyOptions] = None
+
+    # 프론트에서 anomaly_options 없이 직접 보낼 경우를 대비한 호환 필드
+    method: Optional[str] = None
+    sensitivity: Optional[str] = None
 
 
 # =========================================================
@@ -91,7 +99,8 @@ def read_root() -> Dict[str, str]:
     return {
         "message": "TIME FastAPI server is running.",
         "status": "ok",
-        "version": "2.0.0",
+        "version": "3.0.0",
+        "mode": "anomaly",
     }
 
 
@@ -106,7 +115,7 @@ def health_check() -> Dict[str, str]:
 # 5. CSV 디코딩 유틸
 # ---------------------------------------------------------
 # utf-8-sig 우선 사용
-# 실패 시 cp949, euc-kr 순서로 재시도
+# 실패 시 utf-8, cp949, euc-kr 순서로 재시도
 # =========================================================
 
 def decode_csv_contents(contents: bytes) -> str:
@@ -125,7 +134,9 @@ def decode_csv_contents(contents: bytes) -> str:
         except Exception as error:
             last_error = error
 
-    raise ValueError(f"CSV 파일 인코딩을 해석할 수 없습니다: {str(last_error)}")
+    raise ValueError(
+        f"CSV 파일 인코딩을 해석할 수 없습니다: {str(last_error)}"
+    )
 
 
 # =========================================================
@@ -176,53 +187,125 @@ async def upload_csv(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 
 # =========================================================
-# 7. 분석 모드 검증
+# 7. 분석 모드 정규화
+# ---------------------------------------------------------
+# 현재 프로젝트는 이상탐지 전용으로 변경
+# 기존 프론트가 forecast를 보내도 anomaly로 처리
 # =========================================================
 
-def validate_analysis_mode(mode: str) -> str:
-    mode = str(mode or "forecast").lower().strip()
+def normalize_analysis_mode(mode: Optional[str]) -> str:
+    mode_text = str(mode or "anomaly").lower().strip()
 
-    if mode in ["forecast", "prediction", "predict"]:
-        return "forecast"
-
-    if mode in ["anomaly", "anomaly_detection", "detect", "outlier"]:
+    if mode_text in [
+        "anomaly",
+        "anomaly_detection",
+        "detect",
+        "outlier",
+        "이상탐지",
+    ]:
         return "anomaly"
 
-    raise ValueError("분석 모드는 forecast 또는 anomaly여야 합니다.")
+    # forecast, prediction 등이 들어와도 현재는 anomaly로 처리
+    return "anomaly"
 
 
-def normalize_anomaly_options(
-    anomaly_options: Optional[AnomalyOptions],
-) -> Dict[str, str]:
-    if anomaly_options is None:
-        return {
-            "method": "auto",
-            "sensitivity": "medium",
-        }
+def normalize_anomaly_method(method: Optional[str]) -> str:
+    method_text = str(method or "auto").strip().lower()
+
+    method_alias = {
+        "자동": "auto",
+        "오토": "auto",
+        "isolationforest": "isolation_forest",
+        "isolation forest": "isolation_forest",
+        "격리숲": "isolation_forest",
+        "z-score": "zscore",
+        "z score": "zscore",
+        "z스코어": "zscore",
+        "stl": "stl_residual",
+        "stl residual": "stl_residual",
+        "잔차": "stl_residual",
+    }
+
+    method_text = method_alias.get(method_text, method_text)
+
+    allowed_methods = [
+        "auto",
+        "isolation_forest",
+        "zscore",
+        "iqr",
+        "stl_residual",
+    ]
+
+    if method_text not in allowed_methods:
+        return "auto"
+
+    return method_text
+
+
+def normalize_sensitivity(sensitivity: Optional[str]) -> str:
+    sensitivity_text = str(sensitivity or "medium").strip().lower()
+
+    high_values = ["high", "높음", "민감", "높은"]
+    medium_values = ["medium", "normal", "보통", "중간", "기본"]
+    low_values = ["low", "낮음", "낮은"]
+
+    if sensitivity_text in high_values:
+        return "high"
+
+    if sensitivity_text in low_values:
+        return "low"
+
+    if sensitivity_text in medium_values:
+        return "medium"
+
+    return "medium"
+
+
+def model_to_dict(model: Any) -> Dict[str, Any]:
+    if model is None:
+        return {}
 
     try:
-        if hasattr(anomaly_options, "model_dump"):
-            return anomaly_options.model_dump()
+        if hasattr(model, "model_dump"):
+            return model.model_dump()
 
-        return anomaly_options.dict()
+        if hasattr(model, "dict"):
+            return model.dict()
     except Exception:
-        return {
-            "method": "auto",
-            "sensitivity": "medium",
-        }
+        return {}
+
+    if isinstance(model, dict):
+        return model
+
+    return {}
+
+
+def normalize_anomaly_options_from_request(
+    request: AnalysisRequest,
+) -> Dict[str, str]:
+    option_dict = model_to_dict(request.anomaly_options)
+
+    method = request.method
+
+    if method is None:
+        method = option_dict.get("method", "auto")
+
+    sensitivity = request.sensitivity
+
+    if sensitivity is None:
+        sensitivity = option_dict.get("sensitivity", "medium")
+
+    return {
+        "method": normalize_anomaly_method(method),
+        "sensitivity": normalize_sensitivity(sensitivity),
+    }
 
 
 # =========================================================
-# 8. 자동 분석 API
+# 8. 자동 이상탐지 API
 # ---------------------------------------------------------
 # editor.html에서 수정된 표 데이터와 분석 옵션을 받아
-# Python 기반 자동 분석을 실행
-#
-# mode="forecast":
-#   기존 예측 분석 실행
-#
-# mode="anomaly":
-#   신규 다변량 이상탐지 분석 실행
+# Python 기반 다변량 이상탐지를 실행
 # =========================================================
 
 @app.post("/analyze")
@@ -234,11 +317,9 @@ def analyze(request: AnalysisRequest) -> Dict[str, Any]:
         )
 
     try:
-        mode = validate_analysis_mode(request.mode)
+        mode = normalize_analysis_mode(request.mode)
 
-        anomaly_options = normalize_anomaly_options(
-            request.anomaly_options,
-        )
+        anomaly_options = normalize_anomaly_options_from_request(request)
 
         result = run_analysis(
             data=request.data,
@@ -246,6 +327,8 @@ def analyze(request: AnalysisRequest) -> Dict[str, Any]:
             horizon=request.horizon,
             protected_cells=request.protected_cells or [],
             anomaly_options=anomaly_options,
+            method=anomaly_options.get("method"),
+            sensitivity=anomaly_options.get("sensitivity"),
         )
 
         return result
@@ -259,7 +342,7 @@ def analyze(request: AnalysisRequest) -> Dict[str, Any]:
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"자동 분석 중 오류가 발생했습니다: {str(error)}",
+            detail=f"자동 이상탐지 중 오류가 발생했습니다: {str(error)}",
         )
 
 

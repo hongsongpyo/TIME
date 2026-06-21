@@ -23,167 +23,329 @@
     </header>
 
     <main class="result-main">
+      <!-- =====================================================
+           1. Result Top
+      ====================================================== -->
+
       <section class="result-top">
         <div>
           <h1 id="resultPageTitle" class="page-title">
-            분석 결과 시각화
+            다변량 시계열 이상탐지 결과
           </h1>
 
           <p id="resultPageDescription" class="page-description">
-            legend를 클릭하면 원하는 그래프만 켜고 끌 수 있습니다.
+            상단 요약 카드로 전체 탐지 결과를 확인하고, 아래 메뉴에서 원하는 그래프를 선택해 확인하세요.
           </p>
         </div>
 
+        <div class="result-action-group">
+          <button id="downloadAnomalyCsvButton" class="tool-button" type="button">
+            결과 CSV 다운로드
+          </button>
+        </div>
+      </section>
+
+      <!-- =====================================================
+           2. Summary Cards
+      ====================================================== -->
+
+      <section class="summary-section">
         <div id="summaryCards" class="summary-cards"></div>
       </section>
 
       <!-- =====================================================
-           1. Forecast Result Section
-           -----------------------------------------------------
-           기존 예측 분석 결과 영역
+           3. Anomaly Dashboard Menu
       ====================================================== -->
 
-      <section id="forecastResultSection">
-        <section class="chart-section">
-          <div class="section-header">
-            <h2>시계열 예측 결과</h2>
-            <p>
-              Train/Test 구간과 모델별 검증 예측값을 함께 확인합니다.
-            </p>
-          </div>
+      <section class="anomaly-dashboard-section">
+        <div class="section-header">
+          <h2>이상탐지 대시보드</h2>
+          <p>
+            그래프를 아래로 길게 나열하지 않고, 메뉴를 선택해 필요한 결과만 확인할 수 있습니다.
+          </p>
+        </div>
 
-          <div id="forecastChart" class="forecast-chart"></div>
-        </section>
+        <div id="anomalyViewMenu" class="chart-menu">
+          <button
+            class="chart-menu-button active"
+            type="button"
+            data-view="timeline"
+          >
+            전체 시계열
+          </button>
 
-        <section class="dashboard-section">
-          <div class="section-header">
-            <h2>모델별 성능 비교 대시보드</h2>
-            <p>
-              RMSE, MAPE, AIC, BIC 등을 기준으로 모델 성능을 비교합니다.
-            </p>
-          </div>
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="score"
+          >
+            이상 점수
+          </button>
 
-          <div class="metrics-table-wrapper">
-            <table class="metrics-table">
-              <thead>
-                <tr>
-                  <th>Model</th>
-                  <th>MAE</th>
-                  <th>RMSE</th>
-                  <th>MAPE</th>
-                  <th>SMAPE</th>
-                  <th>AIC</th>
-                  <th>BIC</th>
-                  <th>Rank</th>
-                </tr>
-              </thead>
-              <tbody id="metricsTableBody"></tbody>
-            </table>
-          </div>
-        </section>
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="contribution"
+          >
+            변수 기여도
+          </button>
+
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="heatmap"
+          >
+            히트맵
+          </button>
+
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="table"
+          >
+            이상 목록
+          </button>
+
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="type"
+          >
+            이상 유형
+          </button>
+
+          <button
+            class="chart-menu-button"
+            type="button"
+            data-view="quality"
+          >
+            데이터 품질
+          </button>
+        </div>
+
+        <div id="anomalyViewContainer" class="anomaly-view-container">
+          <!-- =================================================
+               3-1. 전체 시계열
+          ================================================== -->
+
+          <section
+            id="timelineView"
+            class="anomaly-view-panel active"
+            data-view-panel="timeline"
+          >
+            <div class="section-header compact">
+              <h3>전체 시계열</h3>
+              <p>
+                각 변수의 시계열 흐름과 이상 시점 marker를 함께 확인합니다.
+              </p>
+            </div>
+
+            <div id="anomalyMainChart" class="forecast-chart"></div>
+          </section>
+
+          <!-- =================================================
+               3-2. 이상 점수
+          ================================================== -->
+
+          <section
+            id="scoreView"
+            class="anomaly-view-panel"
+            data-view-panel="score"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>Anomaly Score</h3>
+              <p>
+                시점별 이상 점수와 threshold 기준선을 비교합니다.
+                민감도가 높을수록 threshold가 낮아져 더 많은 이상을 탐지합니다.
+              </p>
+            </div>
+
+            <div id="anomalyScoreChart" class="forecast-chart"></div>
+          </section>
+
+          <!-- =================================================
+               3-3. 변수 기여도
+          ================================================== -->
+
+          <section
+            id="contributionView"
+            class="anomaly-view-panel"
+            data-view-panel="contribution"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>변수별 이상 기여도</h3>
+              <p>
+                이상으로 판단된 시점에서 어떤 변수가 가장 크게 영향을 주었는지 확인합니다.
+              </p>
+            </div>
+
+            <div class="anomaly-detail-layout">
+              <div class="anomaly-detail-main">
+                <div id="featureContributionChart" class="small-chart"></div>
+              </div>
+
+              <aside class="anomaly-detail-side">
+                <h4>선택 이상 시점</h4>
+                <p id="selectedAnomalyDescription" class="detail-description">
+                  이상 목록에서 특정 시점을 선택하면 해당 시점의 변수별 기여도가 표시됩니다.
+                </p>
+              </aside>
+            </div>
+
+            <div class="metrics-table-wrapper compact-table">
+              <table class="metrics-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Variable</th>
+                    <th>Mean Score</th>
+                    <th>Max Score</th>
+                    <th>Contribution</th>
+                    <th>Anomaly Count</th>
+                  </tr>
+                </thead>
+                <tbody id="featureContributionTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- =================================================
+               3-4. 히트맵
+          ================================================== -->
+
+          <section
+            id="heatmapView"
+            class="anomaly-view-panel"
+            data-view-panel="heatmap"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>변수 × 시간 이상도 히트맵</h3>
+              <p>
+                행은 변수, 열은 시간이며 색이 진할수록 해당 변수의 이상 점수가 큽니다.
+              </p>
+            </div>
+
+            <div id="anomalyHeatmapChart" class="forecast-chart"></div>
+          </section>
+
+          <!-- =================================================
+               3-5. 이상 목록
+          ================================================== -->
+
+          <section
+            id="tableView"
+            class="anomaly-view-panel"
+            data-view-panel="table"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>이상 시점 목록</h3>
+              <p>
+                이상 점수가 높은 순서대로 정렬된 Top anomaly 목록입니다.
+                행을 클릭하면 변수 기여도 메뉴에서 해당 시점의 상세 원인을 확인할 수 있습니다.
+              </p>
+            </div>
+
+            <div class="metrics-table-wrapper">
+              <table class="metrics-table anomaly-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Date</th>
+                    <th>Score</th>
+                    <th>Top Variable</th>
+                    <th>Type</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody id="anomalyTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- =================================================
+               3-6. 이상 유형
+          ================================================== -->
+
+          <section
+            id="typeView"
+            class="anomaly-view-panel"
+            data-view-panel="type"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>이상 유형 요약</h3>
+              <p>
+                탐지된 이상 시점을 전역 이상, 맥락 이상, 패턴 이상, 다변량 동시 이상 등으로 요약합니다.
+              </p>
+            </div>
+
+            <div id="anomalyTypeChart" class="small-chart"></div>
+
+            <div class="metrics-table-wrapper compact-table">
+              <table class="metrics-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Count</th>
+                  </tr>
+                </thead>
+                <tbody id="anomalyTypeTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- =================================================
+               3-7. 데이터 품질
+          ================================================== -->
+
+          <section
+            id="qualityView"
+            class="anomaly-view-panel"
+            data-view-panel="quality"
+            hidden
+          >
+            <div class="section-header compact">
+              <h3>데이터 품질 요약</h3>
+              <p>
+                결측치, 보간 여부, 사용자가 보호한 특이치 셀 정보를 확인합니다.
+              </p>
+            </div>
+
+            <div id="dataQualityCards" class="quality-card-grid"></div>
+
+            <div class="metrics-table-wrapper compact-table">
+              <table class="metrics-table">
+                <thead>
+                  <tr>
+                    <th>Column</th>
+                    <th>Missing Count</th>
+                    <th>Protected Count</th>
+                  </tr>
+                </thead>
+                <tbody id="dataQualityTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </section>
 
       <!-- =====================================================
-           2. Anomaly Result Section
-           -----------------------------------------------------
-           신규 이상탐지 분석 결과 영역
+           4. Interpretation
       ====================================================== -->
 
-      <section id="anomalyResultSection" hidden>
-        <section class="chart-section">
-          <div class="section-header">
-            <h2>다변량 시계열 이상탐지 결과</h2>
-            <p>
-              각 변수의 시계열 흐름과 이상 시점 marker를 함께 표시합니다.
-            </p>
-          </div>
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h2>이상탐지 해석 요약</h2>
+          <p>
+            분석 방식, 민감도, 이상 비율, 주요 이상 변수 등을 문장으로 정리합니다.
+          </p>
+        </div>
 
-          <div id="anomalyChart" class="forecast-chart"></div>
-        </section>
-
-        <section class="chart-section">
-          <div class="section-header">
-            <h2>Anomaly Score</h2>
-            <p>
-              시간별 이상 점수와 threshold 기준선을 비교합니다.
-            </p>
-          </div>
-
-          <div id="anomalyScoreChart" class="forecast-chart"></div>
-        </section>
-
-        <section class="dashboard-section">
-          <div class="section-header">
-            <h2>이상탐지 해석 요약</h2>
-            <p>
-              탐지 방식, 이상 비율, 가장 높은 이상 점수 시점 등을 요약합니다.
-            </p>
-          </div>
-
-          <ul id="anomalyInterpretationList" class="interpretation-list"></ul>
-        </section>
-
-        <section class="dashboard-section">
-          <div class="section-header">
-            <h2>변수별 이상 기여도</h2>
-            <p>
-              이상으로 판정된 시점에서 어떤 변수가 크게 영향을 주었는지 확인합니다.
-            </p>
-          </div>
-
-          <div id="featureContributionChart" class="small-chart"></div>
-
-          <div class="metrics-table-wrapper">
-            <table class="metrics-table">
-              <thead>
-                <tr>
-                  <th>Rank</th>
-                  <th>Feature</th>
-                  <th>Mean Score</th>
-                  <th>Max Score</th>
-                  <th>Contribution</th>
-                  <th>Main Count</th>
-                </tr>
-              </thead>
-              <tbody id="featureContributionTableBody"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="dashboard-section">
-          <div class="section-header">
-            <h2>Score 분포</h2>
-            <p>
-              전체 anomaly score가 어떤 범위에 분포하는지 확인합니다.
-            </p>
-          </div>
-
-          <div id="scoreDistributionChart" class="small-chart"></div>
-        </section>
-
-        <section class="dashboard-section">
-          <div class="section-header">
-            <h2>이상 시점 테이블</h2>
-            <p>
-              이상 점수가 높은 순서대로 이상 시점을 정렬합니다.
-            </p>
-          </div>
-
-          <div class="metrics-table-wrapper">
-            <table class="metrics-table anomaly-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Score</th>
-                  <th>Status</th>
-                  <th>Main Feature</th>
-                  <th>Feature Values</th>
-                </tr>
-              </thead>
-              <tbody id="anomalyTableBody"></tbody>
-            </table>
-          </div>
-        </section>
+        <ul id="anomalyInterpretationList" class="interpretation-list"></ul>
       </section>
 
       <p id="resultStatus" class="result-status"></p>
@@ -191,7 +353,6 @@
   </div>
 
   <script src="./js/storage.js"></script>
-  <script src="./js/chart.js"></script>
   <script src="./js/anomaly-chart.js"></script>
   <script src="./js/result.js"></script>
 </body>

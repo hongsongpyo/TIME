@@ -23,29 +23,21 @@
     <main class="editor-main">
       <section class="editor-toolbar">
         <div class="toolbar-left">
-          <h1 class="page-title">데이터 편집</h1>
+          <h1 class="page-title">데이터 편집 및 이상탐지 설정</h1>
           <p class="page-description">
-            CSV 데이터를 수정하고, 분석 목적에 따라 예측 또는 이상탐지를 실행하세요.
+            CSV 데이터를 직접 수정한 뒤, 다변량 시계열 이상탐지를 실행하세요.
+            숫자형 컬럼 전체를 기준으로 anomaly score, 이상 시점, 변수별 기여도를 계산합니다.
           </p>
         </div>
 
         <div class="toolbar-right">
-          <div class="mode-field">
+          <div class="mode-field anomaly-mode-fixed">
             <span class="field-label">분석 모드</span>
 
             <div class="mode-button-group">
               <button
-                id="forecastModeButton"
-                class="mode-button active"
-                type="button"
-                data-mode="forecast"
-              >
-                예측
-              </button>
-
-              <button
                 id="anomalyModeButton"
-                class="mode-button"
+                class="mode-button active"
                 type="button"
                 data-mode="anomaly"
               >
@@ -54,27 +46,7 @@
             </div>
           </div>
 
-          <div id="horizonPanel" class="horizon-field">
-            <label for="horizonInput">
-              <span>시평</span>
-              <input
-                id="horizonInput"
-                type="number"
-                min="1"
-                value="12"
-              />
-            </label>
-
-            <label class="auto-horizon-field">
-              <input
-                id="autoHorizonInput"
-                type="checkbox"
-              />
-              <span>Test 데이터 길이와 동일</span>
-            </label>
-          </div>
-
-          <div id="anomalyOptionPanel" class="anomaly-option-panel" hidden>
+          <div id="anomalyOptionPanel" class="anomaly-option-panel">
             <label for="anomalyMethodSelect" class="select-field">
               <span>탐지 방식</span>
               <select id="anomalyMethodSelect">
@@ -109,25 +81,33 @@
           </button>
 
           <button id="runAnalysisButton" class="primary-button" type="button">
-            자동 분석 실행
+            이상탐지 실행
           </button>
         </div>
       </section>
 
       <section class="editor-guide-section">
         <div class="editor-guide-card">
-          <strong>예측 모드</strong>
+          <strong>다변량 이상탐지</strong>
           <span>
-            단변량 시계열을 기준으로 Train/Test 구간을 나누고 AutoARIMA, Holt-Winters,
-            Exponential Smoothing, Naive 모델을 비교합니다.
+            날짜/시간 컬럼을 자동으로 찾고, 나머지 숫자형 컬럼을 모두 사용해
+            시점별 이상 점수와 변수별 이상 기여도를 계산합니다.
           </span>
         </div>
 
         <div class="editor-guide-card">
-          <strong>이상탐지 모드</strong>
+          <strong>민감도 설정</strong>
           <span>
-            다변량 숫자형 컬럼을 자동으로 분석하여 anomaly score, 이상 시점,
-            변수별 기여도를 계산합니다.
+            낮음은 확실한 이상만 적게 탐지하고, 보통은 기본 기준으로 탐지하며,
+            높음은 threshold를 낮춰 더 민감하게 이상 시점을 탐지합니다.
+          </span>
+        </div>
+
+        <div class="editor-guide-card">
+          <strong>특이치 설정</strong>
+          <span>
+            특이치 설정 버튼을 누른 뒤 특정 셀을 클릭하면 해당 셀만 보호됩니다.
+            같은 행의 다른 변수까지 자동으로 보호하지 않습니다.
           </span>
         </div>
       </section>
@@ -135,7 +115,7 @@
       <section class="table-section">
         <div class="table-guide">
           <span>셀과 컬럼명을 직접 클릭해서 수정할 수 있습니다.</span>
-          <span>특이치 설정 버튼을 누른 뒤 셀을 클릭하면 특이치로 지정됩니다.</span>
+          <span>특이치 설정 버튼을 누른 뒤 셀을 클릭하면 분석에서 보호할 수 있습니다.</span>
         </div>
 
         <div class="table-wrapper">
@@ -147,6 +127,41 @@
       </section>
 
       <p id="editorStatus" class="editor-status"></p>
+
+      <!--
+        기존 editor.js와의 일시적 호환을 위한 숨김 요소.
+        다음 단계에서 editor.js를 이상탐지 전용으로 수정하면 직접 사용하지 않음.
+      -->
+      <div class="legacy-compat-panel" hidden>
+        <button
+          id="forecastModeButton"
+          class="mode-button"
+          type="button"
+          data-mode="forecast"
+        >
+          예측
+        </button>
+
+        <div id="horizonPanel" class="horizon-field">
+          <label for="horizonInput">
+            <span>시평</span>
+            <input
+              id="horizonInput"
+              type="number"
+              min="1"
+              value="12"
+            />
+          </label>
+
+          <label class="auto-horizon-field">
+            <input
+              id="autoHorizonInput"
+              type="checkbox"
+            />
+            <span>Test 데이터 길이와 동일</span>
+          </label>
+        </div>
+      </div>
     </main>
   </div>
 
