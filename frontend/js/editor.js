@@ -8,8 +8,15 @@
 4. 행 추가
 5. 열 추가
 6. 특이치 설정 모드 관리
-7. 시평 직접 입력 / Test 데이터 길이와 동일 옵션 관리
-8. 자동 분석 실행 후 result.html로 이동
+7. 예측 모드 / 이상탐지 모드 관리
+8. 시평 직접 입력 / Test 데이터 길이와 동일 옵션 관리
+9. 이상탐지 방식 / 민감도 옵션 관리
+10. 자동 분석 실행 후 result.html로 이동
+========================================================= */
+
+
+/* =========================================================
+   1. 전역 상태
 ========================================================= */
 
 let tableData = [];
@@ -17,34 +24,67 @@ let columnNames = [];
 let protectedCells = [];
 let specialMode = false;
 
+let analysisMode = "forecast";
+
+let anomalyOptions = {
+  method: "auto",
+  sensitivity: "medium",
+};
+
 let tableHead = null;
 let tableBody = null;
+
 let horizonInput = null;
 let autoHorizonInput = null;
+let horizonPanel = null;
+
+let forecastModeButton = null;
+let anomalyModeButton = null;
+
+let anomalyOptionPanel = null;
+let anomalyMethodSelect = null;
+let anomalySensitivitySelect = null;
+
 let editorStatus = null;
+let runAnalysisButton = null;
+
 let isAnalyzing = false;
 
 
 /* =========================================================
-   1. 초기화
+   2. 초기화
 ========================================================= */
 
 document.addEventListener("DOMContentLoaded", () => {
   tableHead = document.getElementById("tableHead");
   tableBody = document.getElementById("tableBody");
+
   horizonInput = document.getElementById("horizonInput");
   autoHorizonInput = document.getElementById("autoHorizonInput");
+  horizonPanel = document.getElementById("horizonPanel");
+
+  forecastModeButton = document.getElementById("forecastModeButton");
+  anomalyModeButton = document.getElementById("anomalyModeButton");
+
+  anomalyOptionPanel = document.getElementById("anomalyOptionPanel");
+  anomalyMethodSelect = document.getElementById("anomalyMethodSelect");
+  anomalySensitivitySelect = document.getElementById("anomalySensitivitySelect");
+
   editorStatus = document.getElementById("editorStatus");
+  runAnalysisButton = document.getElementById("runAnalysisButton");
 
   bindEditorEvents();
   loadEditorData();
+  normalizeTableDataByColumns();
   renderTable();
   updateHorizonInputState();
+  updateAnalysisModeUI();
+  updateAnomalyOptionUI();
 });
 
 
 /* =========================================================
-   2. 이벤트 연결
+   3. 이벤트 연결
 ========================================================= */
 
 function bindEditorEvents() {
@@ -52,12 +92,23 @@ function bindEditorEvents() {
   const addRowButton = document.getElementById("addRowButton");
   const addColumnButton = document.getElementById("addColumnButton");
   const specialModeButton = document.getElementById("specialModeButton");
-  const runAnalysisButton = document.getElementById("runAnalysisButton");
 
   if (backButton) {
     backButton.addEventListener("click", () => {
       saveCurrentState();
       window.location.href = "./upload.html";
+    });
+  }
+
+  if (forecastModeButton) {
+    forecastModeButton.addEventListener("click", () => {
+      handleChangeAnalysisMode("forecast");
+    });
+  }
+
+  if (anomalyModeButton) {
+    anomalyModeButton.addEventListener("click", () => {
+      handleChangeAnalysisMode("anomaly");
     });
   }
 
@@ -89,17 +140,49 @@ function bindEditorEvents() {
       saveCurrentState();
     });
   }
+
+  if (anomalyMethodSelect) {
+    anomalyMethodSelect.addEventListener("change", () => {
+      anomalyOptions.method = normalizeAnomalyMethod(anomalyMethodSelect.value);
+      saveCurrentState();
+    });
+  }
+
+  if (anomalySensitivitySelect) {
+    anomalySensitivitySelect.addEventListener("change", () => {
+      anomalyOptions.sensitivity = normalizeAnomalySensitivity(
+        anomalySensitivitySelect.value
+      );
+      saveCurrentState();
+    });
+  }
+
+  window.addEventListener("beforeunload", () => {
+    saveCurrentState();
+  });
 }
 
 
 /* =========================================================
-   3. 데이터 불러오기
+   4. 데이터 불러오기
 ========================================================= */
 
 function loadEditorData() {
   tableData = window.TIMEStorage.loadTableData();
   columnNames = window.TIMEStorage.loadColumnNames();
   protectedCells = window.TIMEStorage.loadProtectedCells();
+
+  if (!Array.isArray(tableData)) {
+    tableData = [];
+  }
+
+  if (!Array.isArray(columnNames)) {
+    columnNames = [];
+  }
+
+  if (!Array.isArray(protectedCells)) {
+    protectedCells = [];
+  }
 
   const horizon = window.TIMEStorage.loadHorizon();
 
@@ -119,6 +202,23 @@ function loadEditorData() {
     }
   }
 
+  if (typeof window.TIMEStorage.loadAnalysisMode === "function") {
+    analysisMode = window.TIMEStorage.loadAnalysisMode();
+  } else {
+    analysisMode = "forecast";
+  }
+
+  if (typeof window.TIMEStorage.loadAnomalyOptions === "function") {
+    anomalyOptions = window.TIMEStorage.loadAnomalyOptions();
+  } else {
+    anomalyOptions = {
+      method: "auto",
+      sensitivity: "medium",
+    };
+  }
+
+  anomalyOptions = normalizeAnomalyOptions(anomalyOptions);
+
   if (!tableData || tableData.length === 0) {
     setEditorStatus("업로드된 데이터가 없습니다. 업로드 화면으로 돌아가 CSV를 선택하세요.");
     tableData = [];
@@ -131,7 +231,48 @@ function loadEditorData() {
 
 
 /* =========================================================
-   4. 표 렌더링
+   5. 데이터 정규화
+========================================================= */
+
+function normalizeTableDataByColumns() {
+  if (!Array.isArray(columnNames)) {
+    columnNames = [];
+  }
+
+  if (!Array.isArray(tableData)) {
+    tableData = [];
+  }
+
+  if (columnNames.length === 0 && tableData.length > 0) {
+    columnNames = Object.keys(tableData[0]);
+  }
+
+  tableData = tableData.map((row) => {
+    const normalizedRow = {};
+
+    columnNames.forEach((columnName) => {
+      normalizedRow[columnName] = row && row[columnName] !== undefined
+        ? row[columnName]
+        : "";
+    });
+
+    return normalizedRow;
+  });
+
+  protectedCells = protectedCells.filter((cell) => {
+    return (
+      cell &&
+      Number.isInteger(Number(cell.row)) &&
+      Number(cell.row) >= 0 &&
+      Number(cell.row) < tableData.length &&
+      columnNames.includes(cell.column)
+    );
+  });
+}
+
+
+/* =========================================================
+   6. 표 렌더링
 ========================================================= */
 
 function renderTable() {
@@ -195,7 +336,7 @@ function renderTableBody() {
 
 
 /* =========================================================
-   5. 셀 값 수정
+   7. 셀 값 수정
 ========================================================= */
 
 function handleCellEdit(event) {
@@ -232,12 +373,22 @@ function handleCellKeyDown(event) {
 
 
 /* =========================================================
-   6. 컬럼명 수정
+   8. 컬럼명 수정
 ========================================================= */
 
 function handleColumnNameEdit(event) {
   const th = event.target;
   const columnIndex = Number(th.dataset.columnIndex);
+
+  if (
+    !Number.isInteger(columnIndex) ||
+    columnIndex < 0 ||
+    columnIndex >= columnNames.length
+  ) {
+    renderTable();
+    return;
+  }
+
   const oldColumnName = columnNames[columnIndex];
   let newColumnName = th.textContent.trim();
 
@@ -245,8 +396,9 @@ function handleColumnNameEdit(event) {
     newColumnName = oldColumnName;
   }
 
-  if (columnNames.includes(newColumnName) && newColumnName !== oldColumnName) {
-    setEditorStatus("이미 존재하는 컬럼명입니다.");
+  newColumnName = makeUniqueColumnName(newColumnName, columnIndex);
+
+  if (newColumnName === oldColumnName) {
     th.textContent = oldColumnName;
     return;
   }
@@ -256,11 +408,11 @@ function handleColumnNameEdit(event) {
   tableData = tableData.map((row) => {
     const newRow = {};
 
-    columnNames.forEach((column) => {
-      if (column === newColumnName) {
-        newRow[column] = row[oldColumnName] ?? "";
+    columnNames.forEach((columnName) => {
+      if (columnName === newColumnName) {
+        newRow[columnName] = row[oldColumnName] ?? "";
       } else {
-        newRow[column] = row[column] ?? "";
+        newRow[columnName] = row[columnName] ?? "";
       }
     });
 
@@ -289,12 +441,42 @@ function handleHeaderKeyDown(event) {
   }
 }
 
+function makeUniqueColumnName(columnName, currentIndex = -1) {
+  let baseName = String(columnName || "column").trim();
+
+  if (!baseName) {
+    baseName = "column";
+  }
+
+  const existingNames = columnNames.filter((_, index) => {
+    return index !== currentIndex;
+  });
+
+  if (!existingNames.includes(baseName)) {
+    return baseName;
+  }
+
+  let count = 1;
+  let candidate = `${baseName}_${count}`;
+
+  while (existingNames.includes(candidate)) {
+    count += 1;
+    candidate = `${baseName}_${count}`;
+  }
+
+  return candidate;
+}
+
 
 /* =========================================================
-   7. 행 추가
+   9. 행 추가
 ========================================================= */
 
 function handleAddRow() {
+  if (columnNames.length === 0) {
+    columnNames = ["date", "value"];
+  }
+
   const newRow = {};
 
   columnNames.forEach((columnName) => {
@@ -305,20 +487,17 @@ function handleAddRow() {
 
   saveCurrentState();
   renderTable();
+
   setEditorStatus("새 행이 추가되었습니다.");
 }
 
 
 /* =========================================================
-   8. 열 추가
+   10. 열 추가
 ========================================================= */
 
 function handleAddColumn() {
-  let newColumnName = `new_column_${columnNames.length + 1}`;
-
-  while (columnNames.includes(newColumnName)) {
-    newColumnName = `new_column_${columnNames.length + 1}_${Date.now()}`;
-  }
+  const newColumnName = makeUniqueColumnName("new_column");
 
   columnNames.push(newColumnName);
 
@@ -331,12 +510,13 @@ function handleAddColumn() {
 
   saveCurrentState();
   renderTable();
+
   setEditorStatus("새 열이 추가되었습니다.");
 }
 
 
 /* =========================================================
-   9. 특이치 설정
+   11. 특이치 설정 모드
 ========================================================= */
 
 function handleToggleSpecialMode() {
@@ -346,161 +526,320 @@ function handleToggleSpecialMode() {
 
   if (specialModeButton) {
     specialModeButton.classList.toggle("active", specialMode);
-    specialModeButton.textContent = specialMode ? "특이치 설정 중" : "특이치 설정";
   }
 
-  setEditorStatus(
-    specialMode
-      ? "특이치 설정 모드입니다. 셀을 클릭하면 특이치로 지정/해제됩니다."
-      : "특이치 설정 모드가 해제되었습니다."
-  );
+  if (specialMode) {
+    setEditorStatus("특이치 설정 모드입니다. 보호할 셀을 클릭하세요.");
+  } else {
+    setEditorStatus("특이치 설정 모드가 해제되었습니다.");
+  }
 }
 
 function isProtectedCell(rowIndex, columnName) {
   return protectedCells.some((cell) => {
-    return cell.row === rowIndex && cell.column === columnName;
+    return Number(cell.row) === Number(rowIndex) && cell.column === columnName;
   });
 }
 
 function toggleProtectedCell(rowIndex, columnName) {
-  const exists = isProtectedCell(rowIndex, columnName);
+  const existingIndex = protectedCells.findIndex((cell) => {
+    return Number(cell.row) === Number(rowIndex) && cell.column === columnName;
+  });
 
-  if (exists) {
-    protectedCells = protectedCells.filter((cell) => {
-      return !(cell.row === rowIndex && cell.column === columnName);
-    });
-  } else {
-    protectedCells.push({
-      row: rowIndex,
-      column: columnName,
-    });
+  if (existingIndex >= 0) {
+    protectedCells.splice(existingIndex, 1);
+    setEditorStatus("특이치 지정이 해제되었습니다.");
+    return;
   }
+
+  protectedCells.push({
+    row: Number(rowIndex),
+    column: columnName,
+  });
+
+  setEditorStatus("선택한 셀이 특이치로 지정되었습니다.");
 }
 
 
 /* =========================================================
-   10. 시평 설정
+   12. 분석 모드
 ========================================================= */
 
-function isAutoHorizonEnabled() {
-  return Boolean(autoHorizonInput && autoHorizonInput.checked);
+function handleChangeAnalysisMode(mode) {
+  analysisMode = normalizeAnalysisMode(mode);
+
+  updateAnalysisModeUI();
+  saveCurrentState();
+
+  if (analysisMode === "forecast") {
+    setEditorStatus("예측 모드입니다. 시평을 설정한 뒤 자동 분석을 실행하세요.");
+  } else {
+    setEditorStatus("이상탐지 모드입니다. 탐지 방식과 민감도를 설정한 뒤 자동 분석을 실행하세요.");
+  }
 }
 
-function getCurrentHorizonValue() {
-  if (isAutoHorizonEnabled()) {
-    return getAutoHorizonValue();
+function normalizeAnalysisMode(mode) {
+  const modeText = String(mode || "forecast").trim().toLowerCase();
+
+  if (modeText === "anomaly") {
+    return "anomaly";
   }
 
-  return horizonInput ? Number(horizonInput.value) : 12;
+  return "forecast";
 }
+
+function updateAnalysisModeUI() {
+  analysisMode = normalizeAnalysisMode(analysisMode);
+
+  if (forecastModeButton) {
+    forecastModeButton.classList.toggle("active", analysisMode === "forecast");
+  }
+
+  if (anomalyModeButton) {
+    anomalyModeButton.classList.toggle("active", analysisMode === "anomaly");
+  }
+
+  if (horizonPanel) {
+    horizonPanel.hidden = analysisMode !== "forecast";
+  }
+
+  if (anomalyOptionPanel) {
+    anomalyOptionPanel.hidden = analysisMode !== "anomaly";
+  }
+
+  if (runAnalysisButton) {
+    runAnalysisButton.textContent =
+      analysisMode === "anomaly"
+        ? "이상탐지 실행"
+        : "자동 분석 실행";
+  }
+}
+
+
+/* =========================================================
+   13. 이상탐지 옵션
+========================================================= */
+
+function normalizeAnomalyMethod(method) {
+  const methodText = String(method || "auto").trim().toLowerCase();
+
+  const allowedMethods = [
+    "auto",
+    "isolation_forest",
+    "zscore",
+    "iqr",
+    "stl_residual",
+  ];
+
+  if (allowedMethods.includes(methodText)) {
+    return methodText;
+  }
+
+  return "auto";
+}
+
+function normalizeAnomalySensitivity(sensitivity) {
+  const sensitivityText = String(sensitivity || "medium").trim().toLowerCase();
+
+  const allowedSensitivities = [
+    "low",
+    "medium",
+    "high",
+  ];
+
+  if (allowedSensitivities.includes(sensitivityText)) {
+    return sensitivityText;
+  }
+
+  return "medium";
+}
+
+function normalizeAnomalyOptions(options) {
+  if (!options || typeof options !== "object") {
+    return {
+      method: "auto",
+      sensitivity: "medium",
+    };
+  }
+
+  return {
+    method: normalizeAnomalyMethod(options.method),
+    sensitivity: normalizeAnomalySensitivity(options.sensitivity),
+  };
+}
+
+function updateAnomalyOptionUI() {
+  anomalyOptions = normalizeAnomalyOptions(anomalyOptions);
+
+  if (anomalyMethodSelect) {
+    anomalyMethodSelect.value = anomalyOptions.method;
+  }
+
+  if (anomalySensitivitySelect) {
+    anomalySensitivitySelect.value = anomalyOptions.sensitivity;
+  }
+}
+
+function getCurrentAnomalyOptions() {
+  const method = anomalyMethodSelect
+    ? anomalyMethodSelect.value
+    : anomalyOptions.method;
+
+  const sensitivity = anomalySensitivitySelect
+    ? anomalySensitivitySelect.value
+    : anomalyOptions.sensitivity;
+
+  return normalizeAnomalyOptions({
+    method,
+    sensitivity,
+  });
+}
+
+
+/* =========================================================
+   14. 시평 설정
+========================================================= */
 
 function updateHorizonInputState() {
-  if (!horizonInput) return;
+  if (!horizonInput || !autoHorizonInput) return;
 
-  horizonInput.disabled = isAutoHorizonEnabled();
-
-  if (isAutoHorizonEnabled()) {
-    setEditorStatus("시평이 Test 데이터 길이와 동일하게 자동 설정됩니다.");
+  if (autoHorizonInput.checked) {
+    horizonInput.disabled = true;
+  } else {
+    horizonInput.disabled = false;
   }
 }
 
-function getAutoHorizonValue() {
-  const dataLength = tableData ? tableData.length : 0;
-
-  if (dataLength <= 1) {
-    return 1;
+function getCurrentHorizon() {
+  if (autoHorizonInput && autoHorizonInput.checked) {
+    return "auto";
   }
 
-  const testLength = Math.floor(dataLength * 0.2);
+  if (!horizonInput) {
+    return 12;
+  }
 
-  return Math.max(1, testLength);
+  const horizonValue = Number(horizonInput.value);
+
+  if (!Number.isFinite(horizonValue) || horizonValue <= 0) {
+    return 12;
+  }
+
+  return Math.floor(horizonValue);
 }
+
+
 /* =========================================================
-   11. 자동 분석 실행
+   15. 자동 분석 실행
 ========================================================= */
 
 async function handleRunAnalysis() {
-  if (isAnalyzing) return;
-
-  saveCurrentState();
-
-  if (!tableData || tableData.length === 0) {
-    setEditorStatus("분석할 데이터가 없습니다.");
+  if (isAnalyzing) {
     return;
   }
 
-  const horizon = getCurrentHorizonValue();
+  normalizeTableDataByColumns();
 
-  if (horizon !== "auto" && (!horizon || horizon <= 0)) {
-    setEditorStatus("시평은 1 이상의 숫자로 입력하세요.");
+  if (!tableData || tableData.length === 0) {
+    setEditorStatus("분석할 데이터가 없습니다. CSV 파일을 먼저 업로드하세요.");
     return;
+  }
+
+  if (!columnNames || columnNames.length === 0) {
+    setEditorStatus("분석할 컬럼이 없습니다.");
+    return;
+  }
+
+  analysisMode = normalizeAnalysisMode(analysisMode);
+  anomalyOptions = getCurrentAnomalyOptions();
+
+  const horizon = getCurrentHorizon();
+
+  if (analysisMode === "forecast" && horizon !== "auto") {
+    if (!Number(horizon) || Number(horizon) <= 0) {
+      setEditorStatus("시평은 1 이상의 숫자이거나 auto여야 합니다.");
+      return;
+    }
   }
 
   try {
     isAnalyzing = true;
-    setEditorLock(true);
-    setEditorStatus("자동 분석을 실행하는 중입니다. 잠시만 기다려주세요...");
+    setRunAnalysisButtonState(true);
+
+    if (analysisMode === "anomaly") {
+      setEditorStatus("시계열 이상탐지를 실행하는 중입니다...");
+    } else {
+      setEditorStatus("시계열 예측 분석을 실행하는 중입니다...");
+    }
+
+    saveCurrentState();
 
     const result = await window.TIMEApi.runAnalysis(
       tableData,
+      analysisMode,
       horizon,
-      protectedCells
+      protectedCells,
+      anomalyOptions
     );
 
     window.TIMEStorage.saveAnalysisResult(result);
 
     setEditorStatus("분석 완료. 결과 화면으로 이동합니다.");
+
     window.location.href = "./result.html";
   } catch (error) {
     console.error(error);
     setEditorStatus(error.message || "자동 분석 중 오류가 발생했습니다.");
   } finally {
     isAnalyzing = false;
-    setEditorLock(false);
+    setRunAnalysisButtonState(false);
   }
 }
 
-function setEditorLock(locked) {
-  const buttons = document.querySelectorAll("button");
-  const inputs = document.querySelectorAll("input");
-  const editableCells = document.querySelectorAll("[contenteditable='true']");
+function setRunAnalysisButtonState(isRunning) {
+  if (!runAnalysisButton) return;
 
-  buttons.forEach((button) => {
-    button.disabled = locked;
-  });
+  runAnalysisButton.disabled = isRunning;
 
-  inputs.forEach((input) => {
-    input.disabled = locked;
-  });
-
-  editableCells.forEach((cell) => {
-    cell.contentEditable = locked ? "false" : "true";
-  });
-
-  if (!locked) {
-    updateHorizonInputState();
+  if (isRunning) {
+    runAnalysisButton.textContent =
+      analysisMode === "anomaly"
+        ? "이상탐지 중..."
+        : "분석 중...";
+    return;
   }
 
-  document.body.classList.toggle("analyzing", locked);
+  runAnalysisButton.textContent =
+    analysisMode === "anomaly"
+      ? "이상탐지 실행"
+      : "자동 분석 실행";
 }
 
 
 /* =========================================================
-   12. 현재 상태 저장
+   16. 현재 상태 저장
 ========================================================= */
 
 function saveCurrentState() {
-  const horizon = getCurrentHorizonValue();
+  normalizeTableDataByColumns();
 
   window.TIMEStorage.saveTableData(tableData);
   window.TIMEStorage.saveColumnNames(columnNames);
-  window.TIMEStorage.saveHorizon(horizon);
   window.TIMEStorage.saveProtectedCells(protectedCells);
+  window.TIMEStorage.saveHorizon(getCurrentHorizon());
+
+  if (typeof window.TIMEStorage.saveAnalysisMode === "function") {
+    window.TIMEStorage.saveAnalysisMode(analysisMode);
+  }
+
+  if (typeof window.TIMEStorage.saveAnomalyOptions === "function") {
+    window.TIMEStorage.saveAnomalyOptions(getCurrentAnomalyOptions());
+  }
 }
 
 
 /* =========================================================
-   13. 상태 메시지
+   17. 상태 메시지
 ========================================================= */
 
 function setEditorStatus(message) {

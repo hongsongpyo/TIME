@@ -17,12 +17,22 @@ body {
 }
 
 button,
-input {
+input,
+select {
     font-family: inherit;
 }
 
 button {
     cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+[hidden] {
+    display: none !important;
 }
 
 /* =========================================================
@@ -132,7 +142,7 @@ button {
 }
 
 /* =========================================================
-   Editor Page
+   Common Page Layout
 ========================================================= */
 
 .editor-page,
@@ -143,14 +153,6 @@ button {
 .editor-main,
 .result-main {
     padding: 28px;
-}
-
-.editor-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 24px;
-    margin-bottom: 20px;
 }
 
 .page-title {
@@ -165,6 +167,38 @@ button {
     font-size: 14px;
 }
 
+.section-header {
+    margin-bottom: 14px;
+}
+
+.section-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.section-header p {
+    margin: 6px 0 0;
+    color: #6b7280;
+    font-size: 13px;
+}
+
+/* =========================================================
+   Editor Page
+========================================================= */
+
+.editor-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    margin-bottom: 16px;
+}
+
+.toolbar-left {
+    min-width: 260px;
+}
+
 .toolbar-right {
     display: flex;
     align-items: center;
@@ -173,10 +207,61 @@ button {
     justify-content: flex-end;
 }
 
-.horizon-field {
+/* =========================================================
+   Editor - Mode Field
+========================================================= */
+
+.mode-field {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 999px;
+    padding: 7px 10px;
+    font-size: 14px;
+}
+
+.field-label {
+    color: #6b7280;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.mode-button-group {
+    display: flex;
+    gap: 4px;
+}
+
+.mode-button {
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.mode-button:hover {
+    background: #f3f4f6;
+    color: #374151;
+}
+
+.mode-button.active {
+    background: #2563eb;
+    color: #ffffff;
+}
+
+/* =========================================================
+   Editor - Horizon / Anomaly Options
+========================================================= */
+
+.horizon-field,
+.anomaly-option-panel {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     background: #ffffff;
     border: 1px solid #e5e7eb;
     border-radius: 999px;
@@ -184,12 +269,46 @@ button {
     font-size: 14px;
 }
 
-.horizon-field input {
+.horizon-field label,
+.auto-horizon-field,
+.select-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #374151;
+    white-space: nowrap;
+}
+
+.horizon-field input[type="number"] {
     width: 72px;
     border: none;
     outline: none;
     font-size: 14px;
+    color: #111827;
+    background: transparent;
 }
+
+.horizon-field input[type="number"]:disabled {
+    color: #9ca3af;
+}
+
+.auto-horizon-field input {
+    margin: 0;
+}
+
+.select-field select {
+    border: none;
+    outline: none;
+    background: #f9fafb;
+    color: #111827;
+    border-radius: 999px;
+    padding: 6px 8px;
+    font-size: 13px;
+}
+
+/* =========================================================
+   Buttons
+========================================================= */
 
 .tool-button,
 .primary-button {
@@ -225,6 +344,42 @@ button {
     background: #1d4ed8;
 }
 
+/* =========================================================
+   Editor Guide
+========================================================= */
+
+.editor-guide-section {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.editor-guide-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+    padding: 14px 16px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.035);
+}
+
+.editor-guide-card strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 14px;
+    color: #111827;
+}
+
+.editor-guide-card span {
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+/* =========================================================
+   Table Section
+========================================================= */
+
 .table-section,
 .chart-section,
 .dashboard-section {
@@ -249,7 +404,7 @@ button {
 
 .table-wrapper {
     overflow: auto;
-    max-height: calc(100vh - 230px);
+    max-height: calc(100vh - 290px);
     border: 1px solid #e5e7eb;
     border-radius: 16px;
 }
@@ -257,17 +412,18 @@ button {
 .data-table {
     width: 100%;
     border-collapse: collapse;
+    font-size: 13px;
     background: #ffffff;
-    font-size: 14px;
 }
 
 .data-table th,
 .data-table td {
-    min-width: 130px;
+    min-width: 120px;
+    padding: 10px 12px;
     border-bottom: 1px solid #e5e7eb;
     border-right: 1px solid #e5e7eb;
-    padding: 10px 12px;
-    outline: none;
+    text-align: left;
+    vertical-align: top;
 }
 
 .data-table th {
@@ -279,19 +435,27 @@ button {
     font-weight: 700;
 }
 
-.data-table td:focus,
-.data-table th:focus {
+.data-table td {
+    color: #1f2937;
+    background: #ffffff;
+}
+
+.data-table th:focus,
+.data-table td:focus {
+    outline: 2px solid #93c5fd;
+    outline-offset: -2px;
     background: #eff6ff;
 }
 
-.data-table tr:hover td {
-    background: #fafafa;
+.data-table td.special-cell {
+    background: #fff7ed;
+    color: #c2410c;
+    font-weight: 600;
 }
 
-.data-table .special-cell {
-    background: #fff7ed !important;
-    color: #c2410c;
-    font-weight: 700;
+.data-table td.special-cell::after {
+    content: " ★";
+    color: #f97316;
 }
 
 /* =========================================================
@@ -301,75 +465,83 @@ button {
 .result-top {
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
     gap: 24px;
     margin-bottom: 20px;
 }
 
 .summary-cards {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(110px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 10px;
-    min-width: 360px;
+    max-width: 760px;
 }
 
 .summary-card {
+    min-width: 118px;
     background: #ffffff;
     border: 1px solid #e5e7eb;
     border-radius: 18px;
     padding: 12px 14px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
 .summary-label {
-    font-size: 12px;
     color: #6b7280;
+    font-size: 12px;
+    margin-bottom: 6px;
 }
 
 .summary-value {
-    margin-top: 5px;
+    color: #111827;
     font-size: 18px;
     font-weight: 700;
+    word-break: break-word;
 }
 
-.chart-section {
-    padding: 16px;
-    margin-bottom: 20px;
+.chart-section,
+.dashboard-section {
+    padding: 18px;
+    margin-bottom: 18px;
 }
 
 .forecast-chart {
     width: 100%;
-    height: 620px;
+    min-height: 460px;
 }
 
-.dashboard-section {
-    padding: 20px;
+.small-chart {
+    width: 100%;
+    min-height: 320px;
+    margin-bottom: 14px;
 }
 
-.section-header h2 {
-    margin: 0;
-    font-size: 20px;
-}
-
-.section-header p {
-    margin: 6px 0 16px;
-    color: #6b7280;
-    font-size: 14px;
-}
+/* =========================================================
+   Metrics / Dashboard Tables
+========================================================= */
 
 .metrics-table-wrapper {
-    overflow-x: auto;
+    width: 100%;
+    overflow: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
 }
 
 .metrics-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: 13px;
+    background: #ffffff;
 }
 
 .metrics-table th,
 .metrics-table td {
-    padding: 12px;
+    padding: 11px 12px;
     border-bottom: 1px solid #e5e7eb;
-    text-align: center;
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
 }
 
 .metrics-table th {
@@ -378,25 +550,104 @@ button {
     font-weight: 700;
 }
 
-.metrics-table td:first-child,
-.metrics-table th:first-child {
-    text-align: left;
+.metrics-table td {
+    color: #1f2937;
 }
 
-.best-model-row {
+.metrics-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.metrics-table tbody tr:hover td {
+    background: #f9fafb;
+}
+
+.best-model-row td {
     background: #eff6ff;
+    color: #1d4ed8;
     font-weight: 700;
+}
+
+/* =========================================================
+   Anomaly Result
+========================================================= */
+
+.interpretation-list {
+    margin: 0;
+    padding-left: 20px;
+    color: #374151;
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.interpretation-list li + li {
+    margin-top: 6px;
+}
+
+.anomaly-table td {
+    white-space: normal;
+}
+
+.anomaly-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 4px 9px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.anomaly-badge.normal {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.anomaly-badge.warning {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.feature-value-chip {
+    display: inline-flex;
+    align-items: center;
+    margin: 2px 4px 2px 0;
+    padding: 4px 7px;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #374151;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+/* =========================================================
+   Status
+========================================================= */
+
+.editor-status,
+.result-status {
+    min-height: 20px;
+}
+
+.editor-status.error,
+.result-status.error {
+    color: #dc2626;
+}
+
+.editor-status.success,
+.result-status.success {
+    color: #047857;
 }
 
 /* =========================================================
    Responsive
 ========================================================= */
 
-@media (max-width: 900px) {
-
+@media (max-width: 1100px) {
     .editor-toolbar,
     .result-top {
         flex-direction: column;
+        align-items: stretch;
     }
 
     .toolbar-right {
@@ -404,20 +655,22 @@ button {
     }
 
     .summary-cards {
-        width: 100%;
-        min-width: 0;
-        grid-template-columns: repeat(2, 1fr);
+        justify-content: flex-start;
+        max-width: none;
     }
 
-    .forecast-chart {
-        width: 100%;
-        height: 720px;
+    .editor-guide-section {
+        grid-template-columns: 1fr;
     }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 760px) {
     .app-header {
         padding: 0 16px;
+    }
+
+    .app-credit {
+        display: none;
     }
 
     .editor-main,
@@ -425,31 +678,74 @@ button {
         padding: 18px;
     }
 
-    .summary-cards {
-        grid-template-columns: 1fr;
+    .toolbar-right {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .mode-field,
+    .horizon-field,
+    .anomaly-option-panel {
+        border-radius: 18px;
+        align-items: flex-start;
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .mode-button-group {
+        width: 100%;
+    }
+
+    .mode-button {
+        flex: 1;
+    }
+
+    .horizon-field label,
+    .auto-horizon-field,
+    .select-field {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .select-field select {
+        min-width: 160px;
+    }
+
+    .tool-button,
+    .primary-button {
+        width: 100%;
+    }
+
+    .table-guide {
+        flex-direction: column;
+    }
+
+    .forecast-chart {
+        min-height: 360px;
+    }
+
+    .small-chart {
+        min-height: 280px;
+    }
+
+    .summary-card {
+        min-width: calc(50% - 6px);
     }
 }
 
-button:disabled,
-input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
+@media (max-width: 480px) {
+    .summary-card {
+        width: 100%;
+    }
 
-body.analyzing .table-wrapper {
-    opacity: 0.6;
-    pointer-events: none;
-}
+    .page-title {
+        font-size: 23px;
+    }
 
-body.analyzing::after {
-    content: "자동 분석 중입니다...";
-    position: fixed;
-    right: 28px;
-    bottom: 28px;
-    background: #111827;
-    color: #ffffff;
-    padding: 14px 18px;
-    border-radius: 999px;
-    font-size: 14px;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+    .metrics-table th,
+    .metrics-table td,
+    .data-table th,
+    .data-table td {
+        padding: 9px 10px;
+    }
 }

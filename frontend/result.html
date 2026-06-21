@@ -25,8 +25,11 @@
     <main class="result-main">
       <section class="result-top">
         <div>
-          <h1 class="page-title">예측 결과 시각화</h1>
-          <p class="page-description">
+          <h1 id="resultPageTitle" class="page-title">
+            분석 결과 시각화
+          </h1>
+
+          <p id="resultPageDescription" class="page-description">
             legend를 클릭하면 원하는 그래프만 켜고 끌 수 있습니다.
           </p>
         </div>
@@ -34,33 +37,153 @@
         <div id="summaryCards" class="summary-cards"></div>
       </section>
 
-      <section class="chart-section">
-        <div id="forecastChart" class="forecast-chart"></div>
+      <!-- =====================================================
+           1. Forecast Result Section
+           -----------------------------------------------------
+           기존 예측 분석 결과 영역
+      ====================================================== -->
+
+      <section id="forecastResultSection">
+        <section class="chart-section">
+          <div class="section-header">
+            <h2>시계열 예측 결과</h2>
+            <p>
+              Train/Test 구간과 모델별 검증 예측값을 함께 확인합니다.
+            </p>
+          </div>
+
+          <div id="forecastChart" class="forecast-chart"></div>
+        </section>
+
+        <section class="dashboard-section">
+          <div class="section-header">
+            <h2>모델별 성능 비교 대시보드</h2>
+            <p>
+              RMSE, MAPE, AIC, BIC 등을 기준으로 모델 성능을 비교합니다.
+            </p>
+          </div>
+
+          <div class="metrics-table-wrapper">
+            <table class="metrics-table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>MAE</th>
+                  <th>RMSE</th>
+                  <th>MAPE</th>
+                  <th>SMAPE</th>
+                  <th>AIC</th>
+                  <th>BIC</th>
+                  <th>Rank</th>
+                </tr>
+              </thead>
+              <tbody id="metricsTableBody"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
-      <section class="dashboard-section">
-        <div class="section-header">
-          <h2>모델별 성능 비교 대시보드</h2>
-          <p>RMSE, MAPE, AIC, BIC 등을 기준으로 모델 성능을 비교합니다.</p>
-        </div>
+      <!-- =====================================================
+           2. Anomaly Result Section
+           -----------------------------------------------------
+           신규 이상탐지 분석 결과 영역
+      ====================================================== -->
 
-        <div class="metrics-table-wrapper">
-          <table class="metrics-table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>MAE</th>
-                <th>RMSE</th>
-                <th>MAPE</th>
-                <th>SMAPE</th>
-                <th>AIC</th>
-                <th>BIC</th>
-                <th>Rank</th>
-              </tr>
-            </thead>
-            <tbody id="metricsTableBody"></tbody>
-          </table>
-        </div>
+      <section id="anomalyResultSection" hidden>
+        <section class="chart-section">
+          <div class="section-header">
+            <h2>다변량 시계열 이상탐지 결과</h2>
+            <p>
+              각 변수의 시계열 흐름과 이상 시점 marker를 함께 표시합니다.
+            </p>
+          </div>
+
+          <div id="anomalyChart" class="forecast-chart"></div>
+        </section>
+
+        <section class="chart-section">
+          <div class="section-header">
+            <h2>Anomaly Score</h2>
+            <p>
+              시간별 이상 점수와 threshold 기준선을 비교합니다.
+            </p>
+          </div>
+
+          <div id="anomalyScoreChart" class="forecast-chart"></div>
+        </section>
+
+        <section class="dashboard-section">
+          <div class="section-header">
+            <h2>이상탐지 해석 요약</h2>
+            <p>
+              탐지 방식, 이상 비율, 가장 높은 이상 점수 시점 등을 요약합니다.
+            </p>
+          </div>
+
+          <ul id="anomalyInterpretationList" class="interpretation-list"></ul>
+        </section>
+
+        <section class="dashboard-section">
+          <div class="section-header">
+            <h2>변수별 이상 기여도</h2>
+            <p>
+              이상으로 판정된 시점에서 어떤 변수가 크게 영향을 주었는지 확인합니다.
+            </p>
+          </div>
+
+          <div id="featureContributionChart" class="small-chart"></div>
+
+          <div class="metrics-table-wrapper">
+            <table class="metrics-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Feature</th>
+                  <th>Mean Score</th>
+                  <th>Max Score</th>
+                  <th>Contribution</th>
+                  <th>Main Count</th>
+                </tr>
+              </thead>
+              <tbody id="featureContributionTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="dashboard-section">
+          <div class="section-header">
+            <h2>Score 분포</h2>
+            <p>
+              전체 anomaly score가 어떤 범위에 분포하는지 확인합니다.
+            </p>
+          </div>
+
+          <div id="scoreDistributionChart" class="small-chart"></div>
+        </section>
+
+        <section class="dashboard-section">
+          <div class="section-header">
+            <h2>이상 시점 테이블</h2>
+            <p>
+              이상 점수가 높은 순서대로 이상 시점을 정렬합니다.
+            </p>
+          </div>
+
+          <div class="metrics-table-wrapper">
+            <table class="metrics-table anomaly-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                  <th>Main Feature</th>
+                  <th>Feature Values</th>
+                </tr>
+              </thead>
+              <tbody id="anomalyTableBody"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <p id="resultStatus" class="result-status"></p>
@@ -69,6 +192,7 @@
 
   <script src="./js/storage.js"></script>
   <script src="./js/chart.js"></script>
+  <script src="./js/anomaly-chart.js"></script>
   <script src="./js/result.js"></script>
 </body>
 </html>

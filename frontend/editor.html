@@ -25,12 +25,36 @@
         <div class="toolbar-left">
           <h1 class="page-title">데이터 편집</h1>
           <p class="page-description">
-            CSV 데이터를 표에서 수정하고, 예측 시평과 특이치를 설정하세요.
+            CSV 데이터를 수정하고, 분석 목적에 따라 예측 또는 이상탐지를 실행하세요.
           </p>
         </div>
 
         <div class="toolbar-right">
-          <div class="horizon-field">
+          <div class="mode-field">
+            <span class="field-label">분석 모드</span>
+
+            <div class="mode-button-group">
+              <button
+                id="forecastModeButton"
+                class="mode-button active"
+                type="button"
+                data-mode="forecast"
+              >
+                예측
+              </button>
+
+              <button
+                id="anomalyModeButton"
+                class="mode-button"
+                type="button"
+                data-mode="anomaly"
+              >
+                이상탐지
+              </button>
+            </div>
+          </div>
+
+          <div id="horizonPanel" class="horizon-field">
             <label for="horizonInput">
               <span>시평</span>
               <input
@@ -50,6 +74,28 @@
             </label>
           </div>
 
+          <div id="anomalyOptionPanel" class="anomaly-option-panel" hidden>
+            <label for="anomalyMethodSelect" class="select-field">
+              <span>탐지 방식</span>
+              <select id="anomalyMethodSelect">
+                <option value="auto" selected>Auto</option>
+                <option value="isolation_forest">Isolation Forest</option>
+                <option value="zscore">Z-score</option>
+                <option value="iqr">IQR</option>
+                <option value="stl_residual">STL Residual</option>
+              </select>
+            </label>
+
+            <label for="anomalySensitivitySelect" class="select-field">
+              <span>민감도</span>
+              <select id="anomalySensitivitySelect">
+                <option value="low">낮음</option>
+                <option value="medium" selected>보통</option>
+                <option value="high">높음</option>
+              </select>
+            </label>
+          </div>
+
           <button id="addRowButton" class="tool-button" type="button">
             행 추가
           </button>
@@ -65,6 +111,24 @@
           <button id="runAnalysisButton" class="primary-button" type="button">
             자동 분석 실행
           </button>
+        </div>
+      </section>
+
+      <section class="editor-guide-section">
+        <div class="editor-guide-card">
+          <strong>예측 모드</strong>
+          <span>
+            단변량 시계열을 기준으로 Train/Test 구간을 나누고 AutoARIMA, Holt-Winters,
+            Exponential Smoothing, Naive 모델을 비교합니다.
+          </span>
+        </div>
+
+        <div class="editor-guide-card">
+          <strong>이상탐지 모드</strong>
+          <span>
+            다변량 숫자형 컬럼을 자동으로 분석하여 anomaly score, 이상 시점,
+            변수별 기여도를 계산합니다.
+          </span>
         </div>
       </section>
 
