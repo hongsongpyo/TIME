@@ -3,13 +3,16 @@
 ---------------------------------------------------------
 역할
 1. 다변량 시계열 이상탐지 결과 그래프 렌더링
-2. 변수별 시계열 + 이상 시점 marker 표시
-3. anomaly score + threshold line 표시
-4. 변수별 이상 기여도 그래프 표시
-5. anomaly score 분포 그래프 표시
+2. 변수별 시계열 + 변수별 이상 시점 marker 표시
+3. 사용자가 지정한 특이치 보호점 protected marker 표시
+4. anomaly score + threshold line 표시
+5. 변수별 이상 기여도 그래프 표시
+6. anomaly score 분포 그래프 표시
 ========================================================= */
 
 (function () {
+  "use strict";
+
   /* =========================================================
      1. 기본 유틸
   ========================================================= */
@@ -47,6 +50,12 @@
       return Number(value).toFixed(4).replace(/\.?0+$/, "");
     }
 
+    const numericValue = Number(value);
+
+    if (Number.isFinite(numericValue) && String(value).trim() !== "") {
+      return numericValue.toFixed(4).replace(/\.?0+$/, "");
+    }
+
     return String(value);
   }
 
@@ -65,13 +74,13 @@
         l: 56,
         r: 28,
         t: titleText ? 56 : 24,
-        b: 56,
+        b: 72,
       },
       hovermode: "x unified",
       legend: {
         orientation: "h",
         x: 0,
-        y: -0.2,
+        y: -0.22,
       },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
@@ -154,7 +163,14 @@
     };
   }
 
-  function makeMarkerTrace(name, x, y, visible = true) {
+  function makeMarkerTrace(
+    name,
+    x,
+    y,
+    symbol = "diamond",
+    visible = true,
+    size = 10
+  ) {
     return {
       type: "scatter",
       mode: "markers",
@@ -163,8 +179,8 @@
       y: safeArray(y),
       visible: visible === true ? true : "legendonly",
       marker: {
-        size: 10,
-        symbol: "diamond",
+        size,
+        symbol,
         line: {
           width: 1,
         },
@@ -189,15 +205,134 @@
 
 
   /* =========================================================
-     2. 다변량 시계열 + 이상 시점 그래프
+     2. 결과 구조 정규화
+  ---------------------------------------------------------
+  새 backend/anomaly.py 구조:
+  {
+    date: [...],
+    value_columns: [...],
+    series: { feature: [...] },
+    anomaly_points: {
+      features: {
+        feature: { date: [...], value: [...], score: [...] }
+      }
+    },
+    protected_points: {
+      features: {
+        feature: { date: [...], value: [...], score: [...] }
+      }
+    }
+  }
+
+  기존 anomaly_metrics.py 구조도 최대한 호환
   ========================================================= */
 
-  function buildMultivariateLineTraces(multivariateSeries) {
+  function getRawAnomalyResult(anomalyResult) {
+    return safeObject(anomalyResult.raw_anomaly_result);
+  }
+
+  function getDateList(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
+
+    return safeArray(
+      anomalyResult.date ||
+      raw.date ||
+      multivariateSeries.date
+    );
+  }
+
+  function getValueColumns(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
+
+    return safeArray(
+      anomalyResult.value_columns ||
+      raw.value_columns ||
+      multivariateSeries.value_columns
+    );
+  }
+
+  function getSeriesMap(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
+
+    return safeObject(
+      anomalyResult.series ||
+      raw.series ||
+      multivariateSeries.series
+    );
+  }
+
+  function getAnomalyPoints(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
+
+    return safeObject(
+      anomalyResult.anomaly_points ||
+      raw.anomaly_points ||
+      multivariateSeries.anomaly_points
+    );
+  }
+
+  function getProtectedPoints(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
+
+    return safeObject(
+      anomalyResult.protected_points ||
+      raw.protected_points ||
+      multivariateSeries.protected_points
+    );
+  }
+
+  function getFeaturePointObject(pointPayload, featureName) {
+    const features = safeObject(pointPayload.features);
+    const featurePayload = features[featureName];
+
+    if (featurePayload && typeof featurePayload === "object" && !Array.isArray(featurePayload)) {
+      return {
+        date: safeArray(featurePayload.date),
+        value: safeArray(featurePayload.value),
+        score: safeArray(featurePayload.score),
+      };
+    }
+
+    /*
+      구버전 호환:
+      anomaly_points = {
+        date: [...],
+        features: {
+          energy: [...]
+        }
+      }
+    */
+    if (Array.isArray(featurePayload)) {
+      return {
+        date: safeArray(pointPayload.date),
+        value: featurePayload,
+        score: safeArray(pointPayload.score),
+      };
+    }
+
+    return {
+      date: [],
+      value: [],
+      score: [],
+    };
+  }
+
+
+  /* =========================================================
+     3. 다변량 시계열 line trace
+  ========================================================= */
+
+  function buildMultivariateLineTraces(anomalyResult) {
     const traces = [];
 
-    const dates = safeArray(multivariateSeries.date);
-    const valueColumns = safeArray(multivariateSeries.value_columns);
-    const series = safeObject(multivariateSeries.series);
+    const dates = getDateList(anomalyResult);
+    const valueColumns = getValueColumns(anomalyResult);
+    const series = getSeriesMap(anomalyResult);
 
     valueColumns.forEach((featureName, index) => {
       const values = safeArray(series[featureName]);
@@ -219,31 +354,44 @@
     return traces;
   }
 
-  function buildAnomalyMarkerTraces(multivariateSeries) {
+
+  /* =========================================================
+     4. 변수별 anomaly marker trace
+  ---------------------------------------------------------
+  핵심 수정:
+  이제 anomaly row 전체가 아니라,
+  anomaly_points.features[feature].date/value 기준으로
+  해당 변수에만 marker를 표시한다.
+  ========================================================= */
+
+  function buildAnomalyMarkerTraces(anomalyResult) {
     const traces = [];
 
-    const valueColumns = safeArray(multivariateSeries.value_columns);
-    const anomalyPoints = safeObject(multivariateSeries.anomaly_points);
-    const anomalyDates = safeArray(anomalyPoints.date);
-    const anomalyFeatures = safeObject(anomalyPoints.features);
+    const valueColumns = getValueColumns(anomalyResult);
+    const anomalyPoints = getAnomalyPoints(anomalyResult);
 
-    if (anomalyDates.length === 0) {
+    if (!anomalyPoints || Object.keys(anomalyPoints).length === 0) {
       return traces;
     }
 
     valueColumns.forEach((featureName, index) => {
-      const values = safeArray(anomalyFeatures[featureName]);
+      const featurePoints = getFeaturePointObject(anomalyPoints, featureName);
 
-      if (!hasValues(values)) {
+      if (
+        featurePoints.date.length === 0 ||
+        !hasValues(featurePoints.value)
+      ) {
         return;
       }
 
       traces.push(
         makeMarkerTrace(
           `${featureName} 이상 시점`,
-          anomalyDates,
-          values,
-          index < 5
+          featurePoints.date,
+          featurePoints.value,
+          "diamond",
+          index < 5,
+          10
         )
       );
     });
@@ -251,12 +399,59 @@
     return traces;
   }
 
-  function renderMultivariateAnomalyChart(elementId, anomalyResult) {
-    const multivariateSeries = safeObject(anomalyResult.multivariate_series);
 
+  /* =========================================================
+     5. 사용자가 지정한 특이치 protected marker trace
+  ---------------------------------------------------------
+  Editor에서 특이치 설정한 셀을 별도 star marker로 표시한다.
+  anomaly 판정에서 제외된 protected point와 시각적으로 구분 가능.
+  ========================================================= */
+
+  function buildProtectedMarkerTraces(anomalyResult) {
+    const traces = [];
+
+    const valueColumns = getValueColumns(anomalyResult);
+    const protectedPoints = getProtectedPoints(anomalyResult);
+
+    if (!protectedPoints || Object.keys(protectedPoints).length === 0) {
+      return traces;
+    }
+
+    valueColumns.forEach((featureName, index) => {
+      const featurePoints = getFeaturePointObject(protectedPoints, featureName);
+
+      if (
+        featurePoints.date.length === 0 ||
+        !hasValues(featurePoints.value)
+      ) {
+        return;
+      }
+
+      traces.push(
+        makeMarkerTrace(
+          `${featureName} 특이치 설정`,
+          featurePoints.date,
+          featurePoints.value,
+          "star",
+          index < 5,
+          13
+        )
+      );
+    });
+
+    return traces;
+  }
+
+
+  /* =========================================================
+     6. 다변량 이상탐지 통합 그래프
+  ========================================================= */
+
+  function renderMultivariateAnomalyChart(elementId, anomalyResult) {
     const traces = [
-      ...buildMultivariateLineTraces(multivariateSeries),
-      ...buildAnomalyMarkerTraces(multivariateSeries),
+      ...buildMultivariateLineTraces(anomalyResult),
+      ...buildAnomalyMarkerTraces(anomalyResult),
+      ...buildProtectedMarkerTraces(anomalyResult),
     ];
 
     if (traces.length === 0) {
@@ -291,7 +486,56 @@
 
 
   /* =========================================================
-     3. Anomaly Score 그래프
+     7. Anomaly score 데이터 정규화
+  ========================================================= */
+
+  function getAnomalySeries(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const anomalySeries = safeObject(anomalyResult.anomaly_series);
+
+    const dates = safeArray(
+      anomalySeries.date ||
+      anomalyResult.date ||
+      raw.date
+    );
+
+    const scores = safeArray(
+      anomalySeries.score ||
+      anomalyResult.score ||
+      raw.score
+    );
+
+    const isAnomaly = safeArray(
+      anomalySeries.is_anomaly ||
+      anomalyResult.is_anomaly ||
+      raw.is_anomaly
+    );
+
+    const threshold =
+      anomalySeries.threshold ??
+      anomalyResult.threshold ??
+      raw.threshold ??
+      safeObject(anomalyResult.summary).threshold ??
+      null;
+
+    let thresholdValues = safeArray(anomalySeries.threshold_values);
+
+    if (thresholdValues.length === 0 && dates.length > 0 && threshold !== null && threshold !== undefined) {
+      thresholdValues = dates.map(() => threshold);
+    }
+
+    return {
+      date: dates,
+      score: scores,
+      is_anomaly: isAnomaly,
+      threshold,
+      threshold_values: thresholdValues,
+    };
+  }
+
+
+  /* =========================================================
+     8. Anomaly Score 그래프
   ========================================================= */
 
   function buildScoreLineTrace(anomalySeries) {
@@ -304,19 +548,12 @@
   }
 
   function buildThresholdTrace(anomalySeries) {
-    const dates = safeArray(anomalySeries.date);
-    let thresholdValues = safeArray(anomalySeries.threshold_values);
-
-    if (thresholdValues.length === 0 && dates.length > 0) {
-      thresholdValues = dates.map(() => anomalySeries.threshold);
-    }
-
     return {
       type: "scatter",
       mode: "lines",
       name: "Threshold",
-      x: dates,
-      y: thresholdValues,
+      x: safeArray(anomalySeries.date),
+      y: safeArray(anomalySeries.threshold_values),
       line: {
         dash: "dash",
       },
@@ -350,12 +587,14 @@
       "Detected Anomaly",
       anomalyDates,
       anomalyScores,
-      true
+      "diamond",
+      true,
+      10
     );
   }
 
   function renderAnomalyScoreChart(elementId, anomalyResult) {
-    const anomalySeries = safeObject(anomalyResult.anomaly_series);
+    const anomalySeries = getAnomalySeries(anomalyResult);
 
     const dates = safeArray(anomalySeries.date);
     const scores = safeArray(anomalySeries.score);
@@ -374,7 +613,8 @@
 
     if (
       anomalySeries.threshold !== null &&
-      anomalySeries.threshold !== undefined
+      anomalySeries.threshold !== undefined &&
+      hasValues(anomalySeries.threshold_values)
     ) {
       traces.push(buildThresholdTrace(anomalySeries));
     }
@@ -405,11 +645,20 @@
 
 
   /* =========================================================
-     4. 변수별 이상 기여도 그래프
+     9. 변수별 이상 기여도 그래프
   ========================================================= */
 
+  function getFeatureContributionRows(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+
+    return safeArray(
+      anomalyResult.feature_contribution ||
+      raw.feature_contribution
+    );
+  }
+
   function renderFeatureContributionChart(elementId, anomalyResult) {
-    const rows = safeArray(anomalyResult.feature_contribution);
+    const rows = getFeatureContributionRows(anomalyResult);
 
     if (rows.length === 0) {
       renderEmptyChart(
@@ -420,12 +669,20 @@
     }
 
     const sortedRows = [...rows].sort((a, b) => {
+      const aRank = Number(a.rank ?? 999999);
+      const bRank = Number(b.rank ?? 999999);
+
+      if (aRank !== bRank) {
+        return bRank - aRank;
+      }
+
       const aScore = Number(a.contribution_ratio ?? a.mean_score ?? 0);
       const bScore = Number(b.contribution_ratio ?? b.mean_score ?? 0);
+
       return aScore - bScore;
     });
 
-    const features = sortedRows.map((row) => String(row.feature || "-"));
+    const features = sortedRows.map((row) => String(row.feature || row.column || "-"));
     const ratios = sortedRows.map((row) => {
       const value = row.contribution_ratio ?? row.mean_score ?? 0;
       return Number(value) || 0;
@@ -470,8 +727,85 @@
 
 
   /* =========================================================
-     5. Anomaly Score 분포 그래프
+     10. Score distribution 데이터 생성
   ========================================================= */
+
+  function getScoreDistribution(anomalyResult) {
+    const raw = getRawAnomalyResult(anomalyResult);
+    const existing = safeObject(anomalyResult.score_distribution);
+
+    if (
+      Array.isArray(existing.bin_start) &&
+      Array.isArray(existing.bin_end) &&
+      Array.isArray(existing.count)
+    ) {
+      return existing;
+    }
+
+    const scores = safeArray(
+      anomalyResult.score ||
+      raw.score ||
+      safeObject(anomalyResult.anomaly_series).score
+    )
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+
+    if (scores.length === 0) {
+      return {
+        bin_start: [],
+        bin_end: [],
+        count: [],
+      };
+    }
+
+    const binCount = Math.min(8, Math.max(4, Math.ceil(Math.sqrt(scores.length))));
+    const minScore = Math.min(...scores);
+    const maxScore = Math.max(...scores);
+
+    if (minScore === maxScore) {
+      return {
+        bin_start: [minScore],
+        bin_end: [maxScore],
+        count: [scores.length],
+      };
+    }
+
+    const step = (maxScore - minScore) / binCount;
+    const binStart = [];
+    const binEnd = [];
+    const count = [];
+
+    for (let index = 0; index < binCount; index += 1) {
+      const start = minScore + step * index;
+      const end = index === binCount - 1
+        ? maxScore
+        : minScore + step * (index + 1);
+
+      binStart.push(start);
+      binEnd.push(end);
+      count.push(0);
+    }
+
+    scores.forEach((score) => {
+      let binIndex = Math.floor((score - minScore) / step);
+
+      if (binIndex >= binCount) {
+        binIndex = binCount - 1;
+      }
+
+      if (binIndex < 0) {
+        binIndex = 0;
+      }
+
+      count[binIndex] += 1;
+    });
+
+    return {
+      bin_start: binStart,
+      bin_end: binEnd,
+      count,
+    };
+  }
 
   function buildDistributionLabels(scoreDistribution) {
     const binStart = safeArray(scoreDistribution.bin_start);
@@ -489,8 +823,13 @@
     return labels;
   }
 
+
+  /* =========================================================
+     11. Anomaly Score 분포 그래프
+  ========================================================= */
+
   function renderScoreDistributionChart(elementId, anomalyResult) {
-    const scoreDistribution = safeObject(anomalyResult.score_distribution);
+    const scoreDistribution = getScoreDistribution(anomalyResult);
 
     const labels = buildDistributionLabels(scoreDistribution);
     const counts = safeArray(scoreDistribution.count);
@@ -535,7 +874,7 @@
 
 
   /* =========================================================
-     6. 통합 렌더링 함수
+     12. 전체 이상탐지 차트 렌더링
   ========================================================= */
 
   function renderAllAnomalyCharts(anomalyResult) {
@@ -547,7 +886,7 @@
 
 
   /* =========================================================
-     7. 전역 객체 등록
+     13. 전역 객체 등록
   ========================================================= */
 
   window.TIMEAnomalyChart = {
