@@ -218,6 +218,14 @@ button:disabled {
     justify-content: flex-end;
 }
 
+.toolbar-option-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 /* =========================================================
    Editor - Mode Field
 ========================================================= */
@@ -370,6 +378,53 @@ button:disabled {
 }
 
 /* =========================================================
+   Editor - Action Button Group
+========================================================= */
+
+.editor-action-group {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid #d1d5db;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.editor-action-group .action-group-button {
+    border: none;
+    border-left: 1px solid #e5e7eb;
+    border-radius: 0;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.editor-action-group .action-group-button:first-child {
+    border-left: none;
+}
+
+.editor-action-group .tool-button {
+    background: #ffffff;
+}
+
+.editor-action-group .tool-button:hover {
+    background: #f3f4f6;
+}
+
+.editor-action-group .tool-button.active {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.editor-action-group .primary-button {
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.editor-action-group .primary-button:hover {
+    background: #1d4ed8;
+}
+
+/* =========================================================
    Editor Guide
 ========================================================= */
 
@@ -503,6 +558,45 @@ button:disabled {
     justify-content: flex-end;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+/* =========================================================
+   Result - Download Select Group
+========================================================= */
+
+.download-select-group {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid #d1d5db;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.download-select {
+    border: none;
+    outline: none;
+    background: #ffffff;
+    color: #374151;
+    padding: 10px 12px 10px 14px;
+    font-size: 14px;
+    min-width: 160px;
+}
+
+.download-select:focus {
+    background: #f9fafb;
+}
+
+.download-select-group .tool-button {
+    border: none;
+    border-left: 1px solid #e5e7eb;
+    border-radius: 0;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.download-select-group .tool-button:hover {
+    background: #f3f4f6;
 }
 
 .summary-section {
@@ -860,6 +954,7 @@ button:disabled {
     }
 
     .toolbar-right,
+    .toolbar-option-row,
     .result-action-group {
         justify-content: flex-start;
     }
@@ -896,9 +991,11 @@ button:disabled {
         padding: 18px;
     }
 
-    .toolbar-right {
+    .toolbar-right,
+    .toolbar-option-row {
         flex-direction: column;
         align-items: stretch;
+        width: 100%;
     }
 
     .mode-field,
@@ -932,6 +1029,39 @@ button:disabled {
     .tool-button,
     .primary-button {
         width: 100%;
+    }
+
+    .editor-action-group {
+        width: 100%;
+        flex-direction: column;
+        border-radius: 18px;
+    }
+
+    .editor-action-group .action-group-button {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid #e5e7eb;
+    }
+
+    .editor-action-group .action-group-button:first-child {
+        border-top: none;
+    }
+
+    .download-select-group {
+        width: 100%;
+        border-radius: 18px;
+        flex-direction: column;
+    }
+
+    .download-select {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .download-select-group .tool-button {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid #e5e7eb;
     }
 
     .table-guide {

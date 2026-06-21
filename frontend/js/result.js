@@ -5,9 +5,9 @@
 1. localStorage에 저장된 이상탐지 분석 결과 불러오기
 2. 이상탐지 요약 카드 렌더링
 3. 메뉴형 대시보드 제어
-4. 전체 시계열 / 이상 점수 / 변수 기여도 / 히트맵 / 이상 목록 / 이상 유형 / 데이터 품질 렌더링
+4. 전체 시계열 / 이상 점수 / 변수 기여도 / 이상 목록 / 이상 유형 / 데이터 품질 렌더링
 5. 이상 목록 행 클릭 시 해당 시점의 변수 기여도 그래프 표시
-6. 이상탐지 결과 CSV 다운로드
+6. 수정 데이터 CSV / 이상탐지 결과 CSV 다운로드
 7. 뒤로가기 버튼 처리
 8. 전역 변수 충돌 방지
 ========================================================= */
@@ -38,7 +38,12 @@
   let dataQualityTableBody = null;
   let selectedAnomalyDescription = null;
 
+  let downloadCsvTypeSelect = null;
+  let downloadCsvButton = null;
+
+  // 구버전 result.html 호환용
   let downloadAnomalyCsvButton = null;
+
   let resultStatus = null;
 
 
@@ -61,7 +66,12 @@
     dataQualityTableBody = document.getElementById("dataQualityTableBody");
     selectedAnomalyDescription = document.getElementById("selectedAnomalyDescription");
 
+    downloadCsvTypeSelect = document.getElementById("downloadCsvTypeSelect");
+    downloadCsvButton = document.getElementById("downloadCsvButton");
+
+    // 구버전 result.html 호환용
     downloadAnomalyCsvButton = document.getElementById("downloadAnomalyCsvButton");
+
     resultStatus = document.getElementById("resultStatus");
 
     try {
@@ -115,8 +125,13 @@
       anomalyViewMenu.addEventListener("click", handleViewMenuClick);
     }
 
+    if (downloadCsvButton) {
+      downloadCsvButton.addEventListener("click", handleDownloadCsv);
+    }
+
+    // 구버전 result.html 호환용
     if (downloadAnomalyCsvButton) {
-      downloadAnomalyCsvButton.addEventListener("click", handleDownloadAnomalyCsv);
+      downloadAnomalyCsvButton.addEventListener("click", handleDownloadAnomalyResultCsv);
     }
 
     window.addEventListener("resize", () => {
@@ -292,7 +307,6 @@
       view === "timeline" ||
       view === "score" ||
       view === "contribution" ||
-      view === "heatmap" ||
       view === "type"
     ) {
       window.TIMEAnomalyChart.renderView(
@@ -323,7 +337,6 @@
       "timeline",
       "score",
       "contribution",
-      "heatmap",
       "table",
       "type",
       "quality",
@@ -889,7 +902,56 @@
      17. CSV 다운로드
   ========================================================= */
 
-  function handleDownloadAnomalyCsv() {
+  function handleDownloadCsv() {
+    const downloadType = downloadCsvTypeSelect
+      ? downloadCsvTypeSelect.value
+      : "anomaly_result";
+
+    if (downloadType === "edited_data") {
+      handleDownloadEditedDataCsv();
+      return;
+    }
+
+    handleDownloadAnomalyResultCsv();
+  }
+
+  function handleDownloadEditedDataCsv() {
+    if (
+      !window.TIMEStorage ||
+      typeof window.TIMEStorage.loadTableData !== "function" ||
+      typeof window.TIMEStorage.loadColumnNames !== "function"
+    ) {
+      setResultStatus("저장된 수정 데이터를 불러올 수 없습니다.");
+      return;
+    }
+
+    const tableData = window.TIMEStorage.loadTableData();
+    const columnNames = window.TIMEStorage.loadColumnNames();
+
+    if (!Array.isArray(tableData) || tableData.length === 0) {
+      setResultStatus("다운로드할 수정 데이터가 없습니다.");
+      return;
+    }
+
+    const csvText = convertRowsToCSVWithColumns(
+      tableData,
+      columnNames
+    );
+
+    if (!csvText) {
+      setResultStatus("수정 데이터 CSV를 생성할 수 없습니다.");
+      return;
+    }
+
+    downloadCSVText(
+      csvText,
+      "time_edited_data"
+    );
+
+    setResultStatus("수정 데이터 CSV가 다운로드되었습니다.");
+  }
+
+  function handleDownloadAnomalyResultCsv() {
     const rows = getDownloadRows();
 
     if (!rows || rows.length === 0) {
@@ -898,32 +960,23 @@
     }
 
     const csvText = convertRowsToCSV(rows);
-    const blob = new Blob(
-      ["\ufeff" + csvText],
-      {
-        type: "text/csv;charset=utf-8;",
-      }
+
+    if (!csvText) {
+      setResultStatus("이상탐지 결과 CSV를 생성할 수 없습니다.");
+      return;
+    }
+
+    downloadCSVText(
+      csvText,
+      "time_anomaly_result"
     );
 
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    const timestamp = new Date()
-      .toISOString()
-      .slice(0, 19)
-      .replaceAll(":", "-");
-
-    link.href = url;
-    link.download = `time_anomaly_result_${timestamp}.csv`;
-    link.style.display = "none";
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(url);
-
     setResultStatus("이상탐지 결과 CSV가 다운로드되었습니다.");
+  }
+
+  // 구버전 함수명 호환
+  function handleDownloadAnomalyCsv() {
+    handleDownloadAnomalyResultCsv();
   }
 
   function getDownloadRows() {
@@ -948,14 +1001,41 @@
 
     const columns = collectCSVColumns(rows);
 
-    const header = columns
+    return convertRowsToCSVWithColumns(
+      rows,
+      columns
+    );
+  }
+
+  function convertRowsToCSVWithColumns(rows, columns) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return "";
+    }
+
+    let csvColumns = Array.isArray(columns)
+      ? columns.filter((column) => {
+          return column !== null &&
+            column !== undefined &&
+            String(column).trim() !== "";
+        })
+      : [];
+
+    if (csvColumns.length === 0) {
+      csvColumns = collectCSVColumns(rows);
+    }
+
+    if (csvColumns.length === 0) {
+      return "";
+    }
+
+    const header = csvColumns
       .map((column) => escapeCSVValue(column))
       .join(",");
 
     const body = rows
       .map((row) => {
-        return columns
-          .map((column) => escapeCSVValue(row[column]))
+        return csvColumns
+          .map((column) => escapeCSVValue(row ? row[column] : ""))
           .join(",");
       })
       .join("\n");
@@ -973,6 +1053,33 @@
     });
 
     return Array.from(columnSet);
+  }
+
+  function downloadCSVText(csvText, filenamePrefix) {
+    const blob = new Blob(
+      ["\ufeff" + csvText],
+      {
+        type: "text/csv;charset=utf-8;",
+      }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    const timestamp = new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replaceAll(":", "-");
+
+    link.href = url;
+    link.download = `${filenamePrefix}_${timestamp}.csv`;
+    link.style.display = "none";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
   }
 
   function escapeCSVValue(value) {

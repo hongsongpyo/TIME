@@ -39,9 +39,16 @@
         </div>
 
         <div class="result-action-group">
-          <button id="downloadAnomalyCsvButton" class="tool-button" type="button">
-            결과 CSV 다운로드
-          </button>
+          <div class="download-select-group">
+            <select id="downloadCsvTypeSelect" class="download-select">
+              <option value="edited_data">수정 데이터 CSV</option>
+              <option value="anomaly_result" selected>이상탐지 결과 CSV</option>
+            </select>
+
+            <button id="downloadCsvButton" class="tool-button" type="button">
+              CSV 다운로드
+            </button>
+          </div>
         </div>
       </section>
 
